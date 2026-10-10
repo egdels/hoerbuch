@@ -1,0 +1,28 @@
+# Bücher, Exporte und Hörbücher: urheberrechtlich geschützt, nie veröffentlichen
+epub/
+*.epub
+*.m4b
+*.mp3
+*_audio/
+*_mp3/
+*.ki-protokoll.txt
+*.bereinigt.txt
+*.bereinigt.neu.txt
+# Audio-Zwischendateien; nur die kurzen Hörproben in beispiel/probe bleiben
+beispiel/*_audio/
+beispiel/*.m4b
+!beispiel/testbuch.m4b
+probe/
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+# Entwicklungsumgebung
+.idea/
+.vscode/
+.DS_Store
