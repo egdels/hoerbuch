@@ -4,7 +4,7 @@
 
 `hoerbuch` verwandelt eine EPUB- oder TXT-Datei in ein Hörbuch mit Kapitelmarken (M4B) oder in eine MP3-Datei pro Kapitel. Die Sprachausgabe läuft komplett lokal mit [Qwen3-TTS](https://huggingface.co/collections/Qwen/qwen3-tts): auf Apple Silicon (M1–M4) über [mlx-audio](https://github.com/Blaizzy/mlx-audio), unter Windows und Linux über das offizielle PyTorch-Paket [qwen-tts](https://github.com/QwenLM/Qwen3-TTS). Es werden keine Daten ins Internet geschickt, nur die Modelle werden beim ersten Start einmalig heruntergeladen.
 
-Das Programm wählt das Backend selbst: auf einem Mac mit Apple Silicon MLX, sonst PyTorch. Mit der Umgebungsvariable `HOERBUCH_BACKEND=mlx` oder `=torch` lässt sich das erzwingen. Entwickelt und durchgemessen ist die Kette auf dem Mac; der PyTorch-Weg nutzt dieselben Modelle in ihrer Originalfassung und dieselbe Textstufe, ist aber vom Autor nicht auf eigener Hardware erprobt. Rückmeldungen dazu sind willkommen.
+Das Programm wählt das Backend selbst: auf einem Mac mit Apple Silicon MLX, sonst PyTorch. Mit der Umgebungsvariable `HOERBUCH_BACKEND=mlx` oder `=torch` lässt sich das erzwingen. Entwickelt und durchgemessen ist die Kette auf dem Mac; der PyTorch-Weg nutzt dieselben Modelle in ihrer Originalfassung und dieselbe Textstufe. Unter Windows ist er auf der CPU einmal komplett durchgelaufen (siehe [Stand der Erprobung](#stand-der-erprobung)), mit CUDA-Grafikkarte aber noch nicht erprobt. Rückmeldungen dazu sind willkommen.
 
 ## Voraussetzungen
 
@@ -16,7 +16,7 @@ Das Programm wählt das Backend selbst: auf einem Mac mit Apple Silicon MLX, son
 
 ### Hardware unter Windows und Linux
 
-Entscheidend ist die Grafikkarte. PyTorch nutzt unter Windows nur NVIDIA-Karten mit CUDA; AMD- und Intel-Karten fallen weg. Ohne CUDA läuft alles auf der CPU, das Programm meldet das beim Laden („auf CPU“), und ein Roman dauert dann Tage statt Stunden.
+Entscheidend ist die Grafikkarte. PyTorch nutzt unter Windows nur NVIDIA-Karten mit CUDA; AMD- und Intel-Karten fallen weg. Ohne CUDA läuft alles auf der CPU, das Programm meldet das beim Laden („auf CPU“), und ein Roman dauert dann Tage statt Stunden (gemessen: rund 100 Zeichen pro Minute auf einem Core i5-9400T, siehe [Stand der Erprobung](#stand-der-erprobung)).
 
 Die TTS-Modelle (1.7B) laufen in 16-bit-Genauigkeit: die Gewichte belegen laut Qwen rund 3,4 GB, dazu kommen 2 bis 4 GB für die Berechnung. Erfahrungsberichte nennen 4 bis 7 GB Grafikspeicher im Betrieb.
 
@@ -27,10 +27,11 @@ Die TTS-Modelle (1.7B) laufen in 16-bit-Genauigkeit: die Gewichte belegen laut Q
 | 12 GB oder mehr | Zusätzlich `--ki` mit Qwen3-8B in 4-bit über bitsandbytes (etwa 5 bis 6 GB). |
 | 16 GB oder mehr | `--ki` auch ohne bitsandbytes in 16 bit (Qwen3-8B belegt dann rund 16 GB, mit Berechnung mehr). |
 
+- **RTX 50er (Blackwell):** Karten wie die RTX 5070 Ti (16 GB) sind gut geeignet und decken alle Zeilen der Tabelle bis einschließlich `--ki` in 4 bit ab. Sie brauchen aber zwingend PyTorch-Pakete mit CUDA 12.8 oder neuer, also den `cu128`-Index aus der Installationsanleitung; ältere Builds (`cu126` und früher) kennen die Architektur nicht und brechen beim ersten Modellaufruf ab. Für `--ki` muss auch `bitsandbytes` neu genug sein, bei einer Fehlermeldung zur Rechenarchitektur hilft `pip install -U bitsandbytes`.
 - **Rechengenauigkeit:** Ab NVIDIA Ampere (RTX 30er) rechnet das Programm in bfloat16. Ältere Karten (GTX 10er, RTX 20er) können das nur langsam emulieren; dort schaltet es automatisch auf float16 um und sagt das beim Laden. Mit `HOERBUCH_DTYPE=bf16`, `fp16` oder `fp32` lässt sich die Genauigkeit erzwingen, etwa um bei Störgeräuschen float32 auf der Grafikkarte zu testen (doppelter Speicherbedarf).
 - **FlashAttention** ist optional, unter Windows mühsam zu bauen und wird nicht vorausgesetzt.
 - **Arbeitsspeicher:** 16 GB reichen; die Gewichte liegen beim Laden kurz im RAM.
-- **Festplatte:** TTS-Modelle je rund 3,5 GB (Base und VoiceDesign), Qwen3-8B für `--ki` rund 16 GB, PyTorch mit CUDA rund 3 GB. Also etwa 10 GB ohne `--ki`, rund 30 GB mit.
+- **Festplatte:** TTS-Modelle je rund 4,3 GB im Cache (Base und VoiceDesign, davon 3,9 GB Gewichte), Qwen3-8B für `--ki` rund 16 GB, PyTorch mit CUDA rund 3 GB. Also etwa 12 GB ohne `--ki`, rund 30 GB mit.
 - **Prozessor:** Nebensache. Die Textstufe (`exportieren`, `bereinigen` ohne `--ki`) ist reines Python und läuft auf jedem Rechner.
 
 Diese Werte stammen aus der Qwen-Dokumentation und aus Erfahrungsberichten, nicht aus eigenen Messungen des Autors.
@@ -85,6 +86,8 @@ py -3.12 -m venv .venv
 
 Meldet die PowerShell „Die Ausführung von Skripts ist auf diesem System deaktiviert“, einmalig `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` ausführen und `activate` wiederholen. In der klassischen Eingabeaufforderung (`cmd`) gibt es diese Sperre nicht.
 
+**Treiber:** Für CUDA genügt der normale NVIDIA-Grafiktreiber (GeForce- oder Studio-Treiber); das CUDA-Toolkit von NVIDIA wird nicht gebraucht, die PyTorch-Pakete bringen die CUDA-Bibliotheken selbst mit. Der Treiber muss nur neu genug für die gewählte CUDA-Version sein. Das zeigt `nvidia-smi` in der obersten Zeile unter „CUDA Version“: Steht dort 12.8 oder höher, passt der `cu128`-Build unten; bei einer kleineren Zahl den Treiber aktualisieren oder im Auswahlhelfer einen älteren Build (z. B. `cu126`) wählen. Letzteres geht nur bis zur RTX 40er-Serie, die RTX 50er braucht `cu128` oder neuer.
+
 Dann zuerst PyTorch mit CUDA installieren, zusammen mit `torchaudio`, das `qwen-tts` ebenfalls braucht und das zur Torch-Version passen muss. Den passenden Befehl für deine CUDA-Version liefert der Auswahlhelfer auf [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/) (Windows, Pip, CUDA), zum Beispiel:
 
 ```powershell
@@ -105,7 +108,7 @@ Für die optionale KI-Bereinigung (`--ki`) kommt `pip install ".[ki]"` dazu, das
 
 Die Befehle in dieser Anleitung sind für alle Plattformen gleich. Ob die Grafikkarte erkannt wurde, zeigt die Zeile „Lade Modell … auf <Grafikkarte>“ beim ersten Start von `probe`. Steht dort „auf CPU“, fehlt die CUDA-Variante von PyTorch.
 
-Beim ersten Start erscheinen unter Windows zwei Warnungen, die harmlos sind: „SoX could not be found!“ (das Paket `sox` wird von `qwen-tts` nur für die 25-Hz-Modelle gebraucht, die hier nicht verwendet werden) und ein Hinweis von Hugging Face, dass der Modell-Cache keine Symlinks nutzen kann. Einzelheiten dazu unter [Hinweise und Fehlerbehebung](#hinweise-und-fehlerbehebung).
+Beim ersten Start erscheinen unter Windows einige Warnungen, die harmlos sind: „SoX could not be found!“ (das Paket `sox` wird von `qwen-tts` nur für die 25-Hz-Modelle gebraucht, die hier nicht verwendet werden), „flash-attn is not installed“ (optional, siehe oben), ein Hinweis von Hugging Face, dass der Modell-Cache keine Symlinks nutzen kann, und der Tipp, `hf_xet` für schnellere Downloads zu installieren. Einzelheiten dazu unter [Hinweise und Fehlerbehebung](#hinweise-und-fehlerbehebung).
 
 **Umgebungsvariablen:** Diese Anleitung nennt `HOERBUCH_BACKEND`, `HOERBUCH_DTYPE`, `HOERBUCH_STIMME` und `HF_HOME`. In der PowerShell setzt man sie so:
 
@@ -358,10 +361,10 @@ Um einen einzelnen Abschnitt neu erzeugen zu lassen, lösche die zugehörige `k�
 ## Hinweise und Fehlerbehebung
 
 - **Modell nicht gefunden (Mac):** Nimm die bf16-Variante, z. B. `--modell mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16` (und entsprechend `--modell-design …-VoiceDesign-bf16`).
-- **Windows: „auf CPU“ statt Grafikkarte:** PyTorch ist ohne CUDA installiert. In der aktivierten Umgebung `pip uninstall torch` und den CUDA-Befehl von pytorch.org erneut ausführen. `python -c "import torch; print(torch.cuda.is_available())"` muss `True` ergeben.
+- **Windows: „auf CPU“ statt Grafikkarte:** Entweder ist PyTorch ohne CUDA installiert, oder der Treiber ist zu alt für den gewählten Build. Erst `nvidia-smi` prüfen (siehe Installation), dann in der aktivierten Umgebung `pip uninstall torch torchaudio` und den CUDA-Befehl von pytorch.org erneut ausführen. `python -c "import torch; print(torch.cuda.is_available())"` muss `True` ergeben.
 - **Windows: Speicher der Grafikkarte reicht nicht:** Für `vertonen` genügt das 0.6B-Modell mit `--modell Qwen/Qwen3-TTS-12Hz-0.6B-Base`, die Qualität ist etwas geringer. Für `--ki` hilft `bitsandbytes` (4-bit) oder ein kleineres Modell per `--ki-modell`.
 - **Windows: „SoX could not be found!“ beim Start:** Harmlos. `qwen-tts` lädt das Python-Paket `sox` immer mit, ruft das SoX-Programm aber nur für die 25-Hz-Modelle auf; die hier verwendeten 12-Hz-Modelle brauchen es nicht.
-- **Windows: Hugging Face warnt wegen fehlender Symlinks:** Ohne Symlinks legt der Modell-Cache jede Datei doppelt ab, der Platzbedarf aus der Hardware-Tabelle verdoppelt sich dann. Abhilfe: in den Windows-Einstellungen den Entwicklermodus einschalten (System → Für Entwickler) und die Modelle danach erneut laden. Wer den doppelten Platz in Kauf nimmt, schaltet die Warnung mit `HF_HUB_DISABLE_SYMLINKS_WARNING=1` ab.
+- **Windows: Hugging Face warnt wegen fehlender Symlinks:** Harmlos. Ohne Symlinks legt der Cache die Modelldateien direkt im Snapshot-Ordner ab statt sie zu verlinken; im Test belegte jedes Modell damit die erwarteten 4,3 GB. Mehr Platz kostet das nur, wenn dasselbe Modell in mehreren Revisionen geladen wird. Wer die Warnung nicht sehen will, schaltet in den Windows-Einstellungen den Entwicklermodus ein (System → Für Entwickler) oder setzt `HF_HUB_DISABLE_SYMLINKS_WARNING=1`.
 - **Zu viele Aussetzer oder Wiederholungen:** `--abschnitt 250` setzt kürzere Abschnitte, `--temperatur 0.6` macht die Ausgabe gleichmäßiger.
 - **`ffmpeg fehlt`:** `brew install ffmpeg` (Mac) bzw. `winget install ffmpeg` (Windows). Die Kapitel liegen trotzdem als WAV im Arbeitsordner und können später exportiert werden.
 - **Eigene Referenzaufnahme:** 10–20 Sekunden, ohne Hintergrundgeräusche, möglichst in dem Tempo und Ton, in dem das Buch gelesen werden soll. Der Wortlaut muss exakt stimmen.
@@ -380,6 +383,8 @@ hoerbuch vertonen testbuch.bereinigt.txt --ref probe/stimme_erzaehler_m.wav --ti
 ```
 
 Wie das Ergebnis klingt, zeigt `beispiel/testbuch.m4b`: das Testbuch, gesprochen per Voice Cloning aus einer eigenen 20-Sekunden-Aufnahme des Autors, 4:39 Minuten mit zwei Kapitelmarken.
+
+In `beispiel/probe/` liegen bereits die drei auf dem Mac entworfenen Stimmen samt Hörproben. `probe` übernimmt vorhandene `stimme_*.wav` und überschreibt nur die `probe_*.wav`. Wer die mitgelieferten Dateien unberührt lassen will, kopiert `testbuch.txt` vorher in einen eigenen Ordner oder gibt mit `--ausgabe` einen anderen Probenordner an.
 
 
 ## Modellvergleich für `--ki`
@@ -407,6 +412,45 @@ Die komplette Kette wurde mit mlx-audio 0.5.8, mlx-lm 0.32, Python 3.14 und den 
 | Testbuch (3.800 Zeichen) | 4 Minuten Hörbuch in gut 3 Minuten |
 
 Ein Roman mit 500.000 Zeichen braucht demnach etwa 8 Stunden. Falls etwas hakt, hilft die vollständige Fehlermeldung mit `--verbose` weiter.
+
+### Windows ohne Grafikkarte (PyTorch auf der CPU)
+
+Der PyTorch-Weg wurde am 16. Oktober 2026 auf einem Windows-11-Rechner ohne NVIDIA-Karte komplett durchgespielt: Intel Core i5-9400T (6 Kerne, 1,8 GHz), 24 GB RAM, Intel UHD Graphics 630, 50 GB frei auf `C:`. Das ist der ungünstigste Fall aus der Hardware-Tabelle und zeigt, dass die Kette auch dort funktioniert, nur langsam.
+
+**Installation**, genau wie oben beschrieben, in der PowerShell:
+
+```powershell
+winget install --id Python.Python.3.12 --exact
+winget install --id Gyan.FFmpeg --exact
+cd C:\wc\hoerbuch
+py -3.12 -m venv .venv
+.venv\Scripts\activate
+pip install .
+```
+
+Der CUDA-Schritt entfällt ohne NVIDIA-Karte; `pip install .` zieht dann die CPU-Variante von PyTorch von PyPI. Installiert wurden Python 3.12.10, ffmpeg 9.0.2, torch 2.14.1+cpu, torchaudio 2.11.0, transformers 4.57.3 und qwen-tts 0.1.1; die virtuelle Umgebung belegt 1,5 GB. Ein neues Terminal nach `winget` ist nötig, damit `py` und `ffmpeg` gefunden werden. Beim Import von `qwen-tts` erscheinen die Warnungen zu SoX und flash-attn, die Prüfung `torch.cuda.is_available()` liefert erwartungsgemäß `False`.
+
+**Durchlauf** mit einer Kopie von `beispiel/testbuch.txt` in einem eigenen Ordner:
+
+```powershell
+hoerbuch bereinigen testbuch.txt
+hoerbuch probe testbuch.bereinigt.txt
+hoerbuch vertonen testbuch.bereinigt.txt --ref probe\stimme_erzaehler_m.wav --titel "Der Nebel über Lindenbach"
+```
+
+Die Bereinigung lief in unter einer Sekunde und lieferte dasselbe Ergebnis wie auf dem Mac (6 Seitenzahlen, 4 Trennungen, 10 Abkürzungen, 11 Zahlen, 7 Kopfzeilen, 2 Kapitel, 4.501 Zeichen). Die Modelle wurden beim ersten Start geladen: VoiceDesign und Base je 4,3 GB, jeweils rund 10 Minuten Download. Die Symlink-Warnung von Hugging Face erschien, die Dateien lagen danach einfach im Snapshot-Ordner, ohne Verdopplung. Zwei abgebrochene HEAD-Anfragen an Hugging Face während des Probelaufs hat `huggingface_hub` selbst wiederholt.
+
+Gemessene Werte auf diesem Rechner (float32, 6 Threads):
+
+| Schritt | Dauer |
+|---|---|
+| Modell laden (nach dem Download) | etwa 1 Minute je Modell |
+| Referenzstimme entwerfen | 10–11 s Audio in 109–125 s |
+| Hörprobe (264 Zeichen) | 16 s Audio in 151–161 s |
+| Tempo im Probelauf | rund 100 Zeichen pro Minute, also etwa ein Zehntel Echtzeit |
+| Vertonen (4.501 Zeichen, 32 Abschnitte) | 5:11 Minuten Hörbuch in 53 Minuten, rund 84 Zeichen pro Minute |
+
+Das Vertonen lief ohne Abbruch durch, kein Abschnitt fiel bei der Längenprüfung auf (keine `auffaellig.txt`), und ffmpeg schrieb die M4B-Datei mit Titel, Genre und zwei Kapitelmarken (2,5 MB bei 64 kbit/s). Der Mac mit M4 ist rund zehnmal schneller. Ein Roman mit 500.000 Zeichen bräuchte auf dieser CPU etwa 100 Stunden. Zum Ausprobieren und für kurze Texte reicht das, für ganze Bücher ist eine CUDA-Karte gesetzt.
 
 ## Aufbau des Projekts
 
