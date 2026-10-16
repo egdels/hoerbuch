@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hoerbuch"
 version = "0.1.0"
-description = "EPUB oder TXT zum deutschen Hörbuch (M4B mit Kapitelmarken), lokal auf Apple Silicon mit Qwen3-TTS"
+description = "EPUB oder TXT zum deutschen Hörbuch (M4B mit Kapitelmarken), lokal mit Qwen3-TTS auf Apple Silicon oder PyTorch/CUDA"
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Christian Kierdorf" }]
@@ -17,18 +17,30 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Natural Language :: German",
     "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
 dependencies = [
-    "mlx-audio>=0.5.8",
+    # Sprachsynthese: mlx-audio auf Apple Silicon, sonst das offizielle PyTorch-Paket qwen-tts.
+    # PyTorch mit CUDA muss unter Windows/Linux vorher passend zur Grafikkarte installiert werden
+    # (siehe README), sonst zieht qwen-tts die CPU-Variante.
+    "mlx-audio>=0.5.8; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "qwen-tts>=0.1.1; sys_platform != 'darwin' or platform_machine != 'arm64'",
     "numpy>=2.0",
     "num2words>=0.5.14",   # Zahlen als Zahlwörter
     "ftfy>=6.3",           # kaputte Umlaute reparieren
 ]
 
 [project.optional-dependencies]
-ki = ["mlx-lm>=0.32"]      # nur für "bereinigen --ki" (lokales Sprachmodell)
+# nur für "bereinigen --ki" (lokales Sprachmodell)
+ki = [
+    "mlx-lm>=0.32; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "transformers>=4.51; sys_platform != 'darwin' or platform_machine != 'arm64'",
+    "accelerate>=1.0; sys_platform != 'darwin' or platform_machine != 'arm64'",
+    "bitsandbytes>=0.45; sys_platform != 'darwin'",   # 4-bit auf CUDA; ohne läuft das Modell unquantisiert
+]
 dev = ["pytest>=8"]
 
 [project.scripts]

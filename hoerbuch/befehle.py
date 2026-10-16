@@ -15,7 +15,7 @@ from .epub import EPUB_SKIP_DEFAULT, epub_to_text
 from .hilfen import fmt_dur
 from .kapitel import parse_book, sample_paragraph
 from .ki import ki_refine
-from .konfig import DEFAULT_VOICE, REF_SENTENCE, VOICE_DESIGNS, default_voice
+from .konfig import DEFAULT_VOICE, FFMPEG_HINT, REF_SENTENCE, VOICE_DESIGNS, default_voice
 from .tts import Voice, synth_checked
 from .zahlen import num2words_available
 
@@ -167,7 +167,7 @@ def cmd_stimme(args):
                      f"oder eine Datei {txt} anlegen.")
         text = txt.read_text(encoding="utf-8").strip()
     if not shutil.which("ffmpeg"):
-        sys.exit("ffmpeg fehlt (brew install ffmpeg).")
+        sys.exit(f"ffmpeg fehlt ({FFMPEG_HINT}).")
     dest = Path(args.ziel) if args.ziel else DEFAULT_VOICE
     dest.parent.mkdir(parents=True, exist_ok=True)
     # Mono, 24 kHz; erst Lautheit auf −20 LUFS (Spitze −2 dB), dann Stille an den Enden auf

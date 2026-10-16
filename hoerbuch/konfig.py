@@ -1,12 +1,75 @@
-"""Einstellungen: Modelle, Pausen, Pegel, Standardstimme."""
+"""Einstellungen: Backend, Modelle, Pausen, Pegel, Standardstimme."""
 from __future__ import annotations
 
 import os
+import platform
+import sys
 from pathlib import Path
 
-MODEL_BASE = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"
-MODEL_DESIGN = "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit"
-MODEL_KI = "mlx-community/Qwen3.5-9B-MLX-4bit"   # Sprachmodell für "bereinigen --ki"
+
+def waehle_backend(plattform: str = sys.platform, maschine: str = platform.machine(),
+                   umgebung: str | None = os.environ.get("HOERBUCH_BACKEND")) -> str:
+    """Rechen-Backend: "mlx" (Apple Silicon, mlx-audio/mlx-lm) oder "torch" (qwen-tts/transformers,
+    alles andere: Windows, Linux, Intel-Mac). Mit HOERBUCH_BACKEND=mlx|torch erzwingbar."""
+    if umgebung:
+        u = umgebung.strip().lower()
+        if u not in ("mlx", "torch"):
+            sys.exit(f"HOERBUCH_BACKEND={umgebung!r} unbekannt, erlaubt sind mlx oder torch.")
+        return u
+    if plattform == "darwin" and maschine.lower() in ("arm64", "aarch64"):
+        return "mlx"
+    return "torch"
+
+
+BACKEND = waehle_backend()
+
+# Modelle je Backend: MLX nutzt die quantisierten Umsetzungen der mlx-community,
+# PyTorch die Originale von Qwen (bf16) bzw. ein Sprachmodell aus dem Transformers-Format.
+MODELLE = {
+    "mlx": {
+        "base": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
+        "design": "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit",
+        "ki": "mlx-community/Qwen3.5-9B-MLX-4bit",
+    },
+    "torch": {
+        "base": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+        "design": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+        "ki": "Qwen/Qwen3-8B",
+    },
+}
+MODEL_BASE = MODELLE[BACKEND]["base"]
+MODEL_DESIGN = MODELLE[BACKEND]["design"]
+MODEL_KI = MODELLE[BACKEND]["ki"]        # Sprachmodell für "bereinigen --ki"
+
+def torch_geraet_und_typ():
+    """(Gerät, dtype, Beschreibung) für das PyTorch-Backend: CUDA mit bfloat16 ab NVIDIA Ampere
+    (RTX 30er), float16 auf älteren Karten (dort wird bfloat16 nur langsam emuliert), sonst CPU
+    mit float32. Mit HOERBUCH_DTYPE=bf16|fp16|fp32 erzwingbar."""
+    import torch
+    wunsch = (os.environ.get("HOERBUCH_DTYPE") or "").strip().lower()
+    typen = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}
+    if wunsch and wunsch not in typen:
+        sys.exit(f"HOERBUCH_DTYPE={wunsch!r} unbekannt, erlaubt sind bf16, fp16 oder fp32.")
+    if torch.cuda.is_available():
+        name = torch.cuda.get_device_name(0)
+        if wunsch:
+            dtype = typen[wunsch]
+        elif torch.cuda.is_bf16_supported():
+            dtype = torch.bfloat16
+        else:
+            dtype = torch.float16
+            print(f"Hinweis: {name} rechnet bfloat16 nicht nativ – verwende float16.")
+        return "cuda:0", dtype, name
+    return "cpu", typen.get(wunsch, torch.float32), "CPU"
+
+
+# Installationshinweis für ffmpeg je Plattform (nur für Fehlermeldungen).
+if sys.platform == "darwin":
+    FFMPEG_HINT = "brew install ffmpeg"
+elif sys.platform == "win32":
+    FFMPEG_HINT = "winget install ffmpeg  (oder von https://ffmpeg.org laden und in den PATH legen)"
+else:
+    FFMPEG_HINT = "z. B. apt install ffmpeg"
 KI_BLOCK_CHARS = 1200        # Textmenge pro Modellanfrage in der KI-Bereinigung
 LANGUAGE = "german"
 

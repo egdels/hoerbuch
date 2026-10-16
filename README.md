@@ -1,18 +1,43 @@
-# hoerbuch – EPUB oder TXT zum deutschen Hörbuch, lokal auf Apple Silicon
+# hoerbuch – EPUB oder TXT zum deutschen Hörbuch, lokal auf Apple Silicon oder mit CUDA-Grafikkarte
 
-> **English summary:** `hoerbuch` turns an EPUB or plain-text book into an M4B audiobook with chapter marks, entirely offline on Apple Silicon using [Qwen3-TTS](https://huggingface.co/collections/Qwen/qwen3-tts) via [mlx-audio](https://github.com/Blaizzy/mlx-audio). Its focus is **German**: a deterministic text-preparation stage spells out numbers, dates, times, percentages and abbreviations with correct German inflection (via `num2words`), strips page numbers, running headers and footnote marks, merges hyphenated lines, and turns EPUB headings into chapter marks. One voice is designed once and then cloned for the whole book, every chunk is length-checked and regenerated on failure, and runs can be interrupted and resumed. An optional local-LLM pass handles ambiguous abbreviations and OCR errors. Documentation below is in German.
+> **English summary:** `hoerbuch` turns an EPUB or plain-text book into an M4B audiobook with chapter marks, entirely offline using [Qwen3-TTS](https://huggingface.co/collections/Qwen/qwen3-tts): on Apple Silicon via [mlx-audio](https://github.com/Blaizzy/mlx-audio), on Windows and Linux via the official PyTorch package [qwen-tts](https://github.com/QwenLM/Qwen3-TTS) (NVIDIA GPU recommended). Its focus is **German**: a deterministic text-preparation stage spells out numbers, dates, times, percentages and abbreviations with correct German inflection (via `num2words`), strips page numbers, running headers and footnote marks, merges hyphenated lines, and turns EPUB headings into chapter marks. One voice is designed once and then cloned for the whole book, every chunk is length-checked and regenerated on failure, and runs can be interrupted and resumed. An optional local-LLM pass handles ambiguous abbreviations and OCR errors. Documentation below is in German.
 
-`hoerbuch` verwandelt eine EPUB- oder TXT-Datei in ein Hörbuch mit Kapitelmarken (M4B) oder in eine MP3-Datei pro Kapitel. Die Sprachausgabe läuft komplett lokal auf Apple Silicon (M1–M4) mit [Qwen3-TTS](https://huggingface.co/collections/Qwen/qwen3-tts) über [mlx-audio](https://github.com/Blaizzy/mlx-audio). Es werden keine Daten ins Internet geschickt, nur die Modelle werden beim ersten Start einmalig heruntergeladen.
+`hoerbuch` verwandelt eine EPUB- oder TXT-Datei in ein Hörbuch mit Kapitelmarken (M4B) oder in eine MP3-Datei pro Kapitel. Die Sprachausgabe läuft komplett lokal mit [Qwen3-TTS](https://huggingface.co/collections/Qwen/qwen3-tts): auf Apple Silicon (M1–M4) über [mlx-audio](https://github.com/Blaizzy/mlx-audio), unter Windows und Linux über das offizielle PyTorch-Paket [qwen-tts](https://github.com/QwenLM/Qwen3-TTS). Es werden keine Daten ins Internet geschickt, nur die Modelle werden beim ersten Start einmalig heruntergeladen.
+
+Das Programm wählt das Backend selbst: auf einem Mac mit Apple Silicon MLX, sonst PyTorch. Mit der Umgebungsvariable `HOERBUCH_BACKEND=mlx` oder `=torch` lässt sich das erzwingen. Entwickelt und durchgemessen ist die Kette auf dem Mac; der PyTorch-Weg nutzt dieselben Modelle in ihrer Originalfassung und dieselbe Textstufe, ist aber vom Autor nicht auf eigener Hardware erprobt. Rückmeldungen dazu sind willkommen.
 
 ## Voraussetzungen
 
-- Mac mit Apple Silicon (M1 oder neuer), empfohlen mindestens 16 GB RAM
-- macOS mit [Homebrew](https://brew.sh)
-- Python 3.10 oder neuer
+- Python 3.10 oder neuer (für den PyTorch-Weg empfiehlt qwen-tts Python 3.12)
 - `ffmpeg` für den M4B/MP3-Export
-- Beim ersten Start etwa 4 GB freier Speicher und eine Internetverbindung für den Modell-Download (je Modell rund 2 GB)
+- Beim ersten Start eine Internetverbindung für den Modell-Download
+- **Mac:** Apple Silicon (M1 oder neuer), empfohlen mindestens 16 GB RAM, [Homebrew](https://brew.sh); die 8-bit-Modelle brauchen je rund 2 GB Platz
+- **Windows/Linux:** NVIDIA-Grafikkarte mit aktuellem Treiber, Einzelheiten im nächsten Abschnitt
+
+### Hardware unter Windows und Linux
+
+Entscheidend ist die Grafikkarte. PyTorch nutzt unter Windows nur NVIDIA-Karten mit CUDA; AMD- und Intel-Karten fallen weg. Ohne CUDA läuft alles auf der CPU, das Programm meldet das beim Laden („auf CPU“), und ein Roman dauert dann Tage statt Stunden.
+
+Die TTS-Modelle (1.7B) laufen in 16-bit-Genauigkeit: die Gewichte belegen laut Qwen rund 3,4 GB, dazu kommen 2 bis 4 GB für die Berechnung. Erfahrungsberichte nennen 4 bis 7 GB Grafikspeicher im Betrieb.
+
+| Grafikspeicher | Was geht |
+|---|---|
+| 8 GB (z. B. RTX 3060 Ti, RTX 4060) | `probe` und `vertonen` mit den 1.7B-Modellen. Empfehlung. |
+| 6 GB | Knapp. Zum Vertonen besser `--modell Qwen/Qwen3-TTS-12Hz-0.6B-Base`. |
+| 12 GB oder mehr | Zusätzlich `--ki` mit Qwen3-8B in 4-bit über bitsandbytes (etwa 5 bis 6 GB). |
+| 16 GB oder mehr | `--ki` auch ohne bitsandbytes in 16 bit (Qwen3-8B belegt dann rund 16 GB, mit Berechnung mehr). |
+
+- **Rechengenauigkeit:** Ab NVIDIA Ampere (RTX 30er) rechnet das Programm in bfloat16. Ältere Karten (GTX 10er, RTX 20er) können das nur langsam emulieren; dort schaltet es automatisch auf float16 um und sagt das beim Laden. Mit `HOERBUCH_DTYPE=bf16`, `fp16` oder `fp32` lässt sich die Genauigkeit erzwingen, etwa um bei Störgeräuschen float32 auf der Grafikkarte zu testen (doppelter Speicherbedarf).
+- **FlashAttention** ist optional, unter Windows mühsam zu bauen und wird nicht vorausgesetzt.
+- **Arbeitsspeicher:** 16 GB reichen; die Gewichte liegen beim Laden kurz im RAM.
+- **Festplatte:** TTS-Modelle je rund 3,5 GB (Base und VoiceDesign), Qwen3-8B für `--ki` rund 16 GB, PyTorch mit CUDA rund 3 GB. Also etwa 10 GB ohne `--ki`, rund 30 GB mit.
+- **Prozessor:** Nebensache. Die Textstufe (`exportieren`, `bereinigen` ohne `--ki`) ist reines Python und läuft auf jedem Rechner.
+
+Diese Werte stammen aus der Qwen-Dokumentation und aus Erfahrungsberichten, nicht aus eigenen Messungen des Autors.
 
 ## Installation (einmalig)
+
+### Mac mit Apple Silicon
 
 ```bash
 brew install python ffmpeg
@@ -38,6 +63,59 @@ Vor jeder Benutzung die virtuelle Umgebung aktivieren:
 ```bash
 source ~/hoerbuch-venv/bin/activate
 ```
+
+### Windows (NVIDIA-Grafikkarte)
+
+Python, ffmpeg und Git kommen am einfachsten über `winget` (in Windows 10/11 enthalten). In der PowerShell:
+
+```powershell
+winget install Python.Python.3.12
+winget install ffmpeg
+winget install Git.Git
+```
+
+Bewusst Python 3.12 und nicht die neueste Version: `qwen-tts` ist bis 3.13 freigegeben, und die CUDA-Pakete von PyTorch erscheinen für ganz neue Python-Versionen oft erst Monate später. Python aus dem Microsoft Store besser meiden, es bringt keinen `py`-Launcher mit und legt Pakete in einem versteckten Ordner ab. Nach der Installation ein neues Terminal öffnen, damit die Programme gefunden werden. Dann:
+
+```powershell
+git clone https://github.com/egdels/hoerbuch.git
+cd hoerbuch
+py -3.12 -m venv .venv
+.venv\Scripts\activate
+```
+
+Meldet die PowerShell „Die Ausführung von Skripts ist auf diesem System deaktiviert“, einmalig `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` ausführen und `activate` wiederholen. In der klassischen Eingabeaufforderung (`cmd`) gibt es diese Sperre nicht.
+
+Dann zuerst PyTorch mit CUDA installieren. Den passenden Befehl für deine CUDA-Version liefert der Auswahlhelfer auf [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/) (Windows, Pip, CUDA), zum Beispiel:
+
+```powershell
+pip install torch --index-url https://download.pytorch.org/whl/cu128
+```
+
+Erst danach das Projekt installieren, sonst zieht `qwen-tts` die reine CPU-Variante von PyTorch:
+
+```powershell
+pip install .
+```
+
+Für die optionale KI-Bereinigung (`--ki`) kommt `pip install ".[ki]"` dazu, das installiert transformers, accelerate und bitsandbytes. Vor jeder Benutzung im Projektordner die virtuelle Umgebung aktivieren:
+
+```powershell
+.venv\Scripts\activate
+```
+
+Die Befehle in dieser Anleitung sind für alle Plattformen gleich. Ob die Grafikkarte erkannt wurde, zeigt die Zeile „Lade Modell … auf <Grafikkarte>“ beim ersten Start von `probe`. Steht dort „auf CPU“, fehlt die CUDA-Variante von PyTorch.
+
+Unter Linux gilt derselbe Weg, mit `python3 -m venv` und `source ~/hoerbuch-venv/bin/activate` wie auf dem Mac.
+
+### Modelle je Backend
+
+| | Apple Silicon (MLX) | Windows/Linux (PyTorch) |
+|---|---|---|
+| Vertonen (`--modell`) | `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit` | `Qwen/Qwen3-TTS-12Hz-1.7B-Base` |
+| Stimmen entwerfen (`--modell-design`) | `mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit` | `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` |
+| KI-Bereinigung (`--ki-modell`) | `mlx-community/Qwen3.5-9B-MLX-4bit` | `Qwen/Qwen3-8B` (4-bit über bitsandbytes, sonst bf16) |
+
+Die Werte in den Tabellen unten (Qualität, Tempo) wurden mit den MLX-Modellen gemessen. Für `--ki` unter PyTorch ist `Qwen/Qwen3-8B` als textbasiertes Modell gesetzt, weil Qwen3.5 9B im Transformers-Format ein multimodales Modell ist; mit `--ki-modell` lässt sich jedes Modell wählen, das `AutoModelForCausalLM` laden kann.
 
 ## Ablauf in drei Schritten
 
@@ -266,9 +344,11 @@ Um einen einzelnen Abschnitt neu erzeugen zu lassen, lösche die zugehörige `k�
 
 ## Hinweise und Fehlerbehebung
 
-- **Modell nicht gefunden:** Nimm die bf16-Variante, z. B. `--modell mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16` (und entsprechend `--modell-design …-VoiceDesign-bf16`).
+- **Modell nicht gefunden (Mac):** Nimm die bf16-Variante, z. B. `--modell mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16` (und entsprechend `--modell-design …-VoiceDesign-bf16`).
+- **Windows: „auf CPU“ statt Grafikkarte:** PyTorch ist ohne CUDA installiert. In der aktivierten Umgebung `pip uninstall torch` und den CUDA-Befehl von pytorch.org erneut ausführen. `python -c "import torch; print(torch.cuda.is_available())"` muss `True` ergeben.
+- **Windows: Speicher der Grafikkarte reicht nicht:** Für `vertonen` genügt das 0.6B-Modell mit `--modell Qwen/Qwen3-TTS-12Hz-0.6B-Base`, die Qualität ist etwas geringer. Für `--ki` hilft `bitsandbytes` (4-bit) oder ein kleineres Modell per `--ki-modell`.
 - **Zu viele Aussetzer oder Wiederholungen:** `--abschnitt 250` setzt kürzere Abschnitte, `--temperatur 0.6` macht die Ausgabe gleichmäßiger.
-- **`ffmpeg fehlt`:** `brew install ffmpeg`. Die Kapitel liegen trotzdem als WAV im Arbeitsordner und können später exportiert werden.
+- **`ffmpeg fehlt`:** `brew install ffmpeg` (Mac) bzw. `winget install ffmpeg` (Windows). Die Kapitel liegen trotzdem als WAV im Arbeitsordner und können später exportiert werden.
 - **Eigene Referenzaufnahme:** 10–20 Sekunden, ohne Hintergrundgeräusche, möglichst in dem Tempo und Ton, in dem das Buch gelesen werden soll. Der Wortlaut muss exakt stimmen.
 - **Dauer abschätzen:** Zeichen des Buchs geteilt durch das im Probelauf angezeigte Tempo (Zeichen/Minute). Auf einem M4 sind es rund 1.000 Zeichen pro Minute, ein Roman mit 500.000 Zeichen braucht also etwa 8 Stunden.
 - **Hugging-Face-Cache:** Die Modelle landen im Standard-Cache unter `~/.cache/huggingface`. Ist die Umgebungsvariable `HF_HOME` gesetzt, liegen sie entsprechend woanders.
@@ -322,11 +402,11 @@ hoerbuch/               Python-Paket
   epub.py               EPUB → Text mit Kapitelmarken
   bereinigung.py        regelbasierte Textbereinigung
   zahlen.py             Zahlen, Daten, Uhrzeiten als Zahlwörter (num2words)
-  ki.py                 optionale Stufe mit lokalem Sprachmodell (mlx-lm)
+  ki.py                 optionale Stufe mit lokalem Sprachmodell (mlx-lm oder transformers)
   kapitel.py            Text in Kapitel und sprechbare Abschnitte zerlegen
-  tts.py                Sprachsynthese mit Qwen3-TTS (mlx-audio), Längenprüfung
+  tts.py                Sprachsynthese mit Qwen3-TTS (mlx-audio oder qwen-tts), Längenprüfung
   audio.py              WAV, Pegel, Stille, M4B/MP3-Export mit ffmpeg
-  konfig.py             Modelle, Pausen, Pegel, Standardstimme
+  konfig.py             Backend-Wahl, Modelle, Pausen, Pegel, Standardstimme
 tests/                  pytest-Tests für Text, Zahlen, Kapitel, EPUB und Audio (ohne Modelle)
 beispiel/               Testbuch, fertiges Hörbuch dazu und Hörproben der drei entworfenen Stimmen
 ```
@@ -338,7 +418,7 @@ pip install -e ".[ki,dev]"
 pytest
 ```
 
-Die Tests brauchen weder Modelle noch Metal und laufen in unter einer Sekunde. Die Textstufe (`bereinigung`, `zahlen`, `kapitel`, `epub`) ist reines Python und lässt sich auch ohne Apple Silicon entwickeln.
+Die Tests brauchen weder Modelle noch Metal oder CUDA und laufen in unter einer Sekunde auf allen Plattformen. Die Textstufe (`bereinigung`, `zahlen`, `kapitel`, `epub`) ist reines Python. Die Modellaufrufe stecken ausschließlich in `tts.py` (Klassen `_VoiceMLX` und `_VoiceTorch`) und `ki.py` (`Refiner`); ein weiteres Backend braucht nur dieselbe kleine Schnittstelle (`synth`, `sample_rate`, `close` bzw. `ask`).
 
 ## Abgrenzung zu anderen Projekten
 
@@ -352,4 +432,4 @@ Die Tests brauchen weder Modelle noch Metal und laufen in unter einer Sekunde. D
 
 ## Lizenz und Modelle
 
-Der Code steht unter der [MIT-Lizenz](LICENSE). Die Modelle stammen von [Qwen](https://huggingface.co/Qwen) (Apache 2.0) und werden in der MLX-Umsetzung der [mlx-community](https://huggingface.co/mlx-community) geladen; das optionale Sprachmodell für `--ki` ebenfalls. Bitte die jeweiligen Lizenzbedingungen beachten.
+Der Code steht unter der [MIT-Lizenz](LICENSE). Die Modelle stammen von [Qwen](https://huggingface.co/Qwen) (Apache 2.0); auf Apple Silicon werden sie in der MLX-Umsetzung der [mlx-community](https://huggingface.co/mlx-community) geladen, unter PyTorch im Original. Das optionale Sprachmodell für `--ki` ebenso. Bitte die jeweiligen Lizenzbedingungen beachten.

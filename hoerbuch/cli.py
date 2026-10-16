@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import sys
 
 from .befehle import cmd_bereinigen, cmd_exportieren, cmd_probe, cmd_stimme, cmd_vertonen
 from .epub import EPUB_SKIP_DEFAULT
-from .konfig import DEFAULT_VOICE, MAX_CHUNK_CHARS, MODEL_BASE, MODEL_DESIGN, MODEL_KI
+from .konfig import BACKEND, DEFAULT_VOICE, MAX_CHUNK_CHARS, MODEL_BASE, MODEL_DESIGN, MODEL_KI
 
 EPILOG = """\
 Ablauf:
@@ -20,9 +21,16 @@ Ausführliche Anleitung: README.md
 
 
 def main():
+    # Umlaute und Sonderzeichen auch dann ausgeben, wenn die Konsole (z. B. unter Windows bei
+    # Umleitung in eine Datei) nicht auf UTF-8 steht.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure") and (stream.encoding or "").lower().replace("-", "") != "utf8":
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    backend_info = ("mlx-audio auf Apple Silicon" if BACKEND == "mlx"
+                    else "qwen-tts/PyTorch (CUDA-Grafikkarte empfohlen)")
     p = argparse.ArgumentParser(
         prog="hoerbuch",
-        description="EPUB oder TXT → deutsches Hörbuch (M4B) mit Qwen3-TTS über mlx-audio auf Apple Silicon.",
+        description=f"EPUB oder TXT → deutsches Hörbuch (M4B) mit Qwen3-TTS über {backend_info}.",
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=EPILOG)
     sub = p.add_subparsers(dest="befehl", required=True)
 
@@ -60,8 +68,9 @@ def main():
     pr.add_argument("--nur-ref", action="store_true",
                     help="keine Stimmen entwerfen, nur die eigene Referenz testen")
     pr.add_argument("--ausgabe", help="Ordner für die Proben (Standard: probe)")
-    pr.add_argument("--modell", default=MODEL_BASE)
-    pr.add_argument("--modell-design", default=MODEL_DESIGN)
+    pr.add_argument("--modell", default=MODEL_BASE, help=f"TTS-Modell (Standard {MODEL_BASE})")
+    pr.add_argument("--modell-design", default=MODEL_DESIGN,
+                    help=f"VoiceDesign-Modell (Standard {MODEL_DESIGN})")
     pr.add_argument("--verbose", action="store_true")
     pr.set_defaults(func=cmd_probe)
 
@@ -87,7 +96,7 @@ def main():
     v.add_argument("--temperatur", type=float, default=0.8,
                    help="niedriger = gleichmäßiger, höher = lebendiger (Standard 0.8)")
     v.add_argument("--ohne-bereinigung", action="store_true")
-    v.add_argument("--modell", default=MODEL_BASE)
+    v.add_argument("--modell", default=MODEL_BASE, help=f"TTS-Modell (Standard {MODEL_BASE})")
     v.add_argument("--verbose", action="store_true")
     v.set_defaults(func=cmd_vertonen)
 

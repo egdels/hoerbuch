@@ -1,4 +1,5 @@
-"""Optionale zweite Bereinigungsstufe mit einem lokalen Sprachmodell (mlx-lm).
+"""Optionale zweite Bereinigungsstufe mit einem lokalen Sprachmodell
+(mlx-lm auf Apple Silicon, sonst transformers/PyTorch).
 
 Das Modell darf den Text nicht umschreiben. Es liefert nur eine Liste von
 Ersetzungen ("von" → "nach"); jede wird nur übernommen, wenn "von" wörtlich im
@@ -13,7 +14,7 @@ from pathlib import Path
 
 from .bereinigung import CleanReport, is_text_par
 from .hilfen import fmt_dur
-from .konfig import KI_BLOCK_CHARS
+from .konfig import BACKEND, KI_BLOCK_CHARS, torch_geraet_und_typ
 
 KI_SYSTEM_ERSETZUNGEN = """Du bereitest deutschen Buchtext für ein Vorleseprogramm (Text-to-Speech) vor.
 Du bekommst nummerierte Absätze. Finde ausschließlich Stellen, die ein Vorleseprogramm falsch aussprechen würde, und schreibe sie so aus, wie ein Sprecher sie vorlesen würde:
@@ -38,28 +39,68 @@ Antworte ausschließlich mit einem JSON-Array der Nummern, die Überschriften si
 
 
 class Refiner:
-    """Kapselt ein Sprachmodell über mlx-lm."""
+    """Kapselt ein Sprachmodell: mlx-lm (Apple Silicon) oder transformers (PyTorch, sonst)."""
 
     def __init__(self, model_id: str, verbose: bool = False):
-        try:
-            from mlx_lm import load
-        except ImportError:
-            sys.exit("mlx-lm fehlt. Installieren mit:  pip install -U mlx-lm")
-        print(f"Lade Sprachmodell {model_id} … (beim ersten Mal wird es heruntergeladen)")
-        self.model, self.tokenizer = load(model_id)
+        self.backend = BACKEND
         self.verbose = verbose
         self.calls = 0
         self.seconds = 0.0
+        print(f"Lade Sprachmodell {model_id} … (beim ersten Mal wird es heruntergeladen)")
+        if self.backend == "mlx":
+            try:
+                from mlx_lm import load
+            except ImportError:
+                sys.exit("mlx-lm fehlt. Installieren mit:  pip install -U mlx-lm")
+            self.model, self.tokenizer = load(model_id)
+        else:
+            try:
+                import torch
+                from transformers import AutoModelForCausalLM, AutoTokenizer
+            except ImportError:
+                sys.exit("transformers fehlt. Installieren mit:  pip install \".[ki]\"\n"
+                         "(PyTorch mit CUDA vorher passend zur Grafikkarte installieren, siehe README.)")
+            device, dtype, geraet = torch_geraet_und_typ()
+            print(f"  auf {geraet} ({str(dtype).replace('torch.', '')})")
+            kwargs = dict(device_map="auto", dtype=dtype)
+            if device != "cpu":
+                try:
+                    # 4-bit-Quantisierung spart rund zwei Drittel des Grafikspeichers (bitsandbytes optional)
+                    from transformers import BitsAndBytesConfig
+                    import bitsandbytes  # noqa: F401
+                    kwargs["quantization_config"] = BitsAndBytesConfig(
+                        load_in_4bit=True, bnb_4bit_compute_dtype=dtype,
+                        bnb_4bit_quant_type="nf4")
+                except ImportError:
+                    print("Hinweis: bitsandbytes fehlt, das Sprachmodell läuft unquantisiert "
+                          "(braucht etwa doppelt so viel Grafikspeicher).")
+            else:
+                print("Hinweis: Ohne CUDA-Grafikkarte läuft das Sprachmodell auf der CPU und ist sehr langsam.")
+            self.tokenizer = AutoTokenizer.from_pretrained(model_id)
+            self.model = AutoModelForCausalLM.from_pretrained(model_id, **kwargs)
+
+    def _generate(self, prompt: str, max_tokens: int) -> str:
+        if self.backend == "mlx":
+            from mlx_lm import generate
+            from mlx_lm.sample_utils import make_sampler
+            return generate(self.model, self.tokenizer, prompt, max_tokens=max_tokens,
+                            sampler=make_sampler(temp=0.0), verbose=False)
+        import torch
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+        with torch.no_grad():
+            out = self.model.generate(**inputs, max_new_tokens=max_tokens, do_sample=False,
+                                      pad_token_id=self.tokenizer.pad_token_id or self.tokenizer.eos_token_id)
+        return self.tokenizer.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
 
     def ask(self, system: str, user: str, max_tokens: int = 1500) -> str:
-        from mlx_lm import generate
-        from mlx_lm.sample_utils import make_sampler
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        prompt = self.tokenizer.apply_chat_template(
-            messages, add_generation_prompt=True, tokenize=False, enable_thinking=False)
+        try:
+            prompt = self.tokenizer.apply_chat_template(
+                messages, add_generation_prompt=True, tokenize=False, enable_thinking=False)
+        except TypeError:   # Chat-Vorlage ohne Denkmodus
+            prompt = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
         t0 = time.time()
-        out = generate(self.model, self.tokenizer, prompt, max_tokens=max_tokens,
-                       sampler=make_sampler(temp=0.0), verbose=False)
+        out = self._generate(prompt, max_tokens)
         self.seconds += time.time() - t0
         self.calls += 1
         out = re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
@@ -86,8 +127,13 @@ class Refiner:
         del self.model
         gc.collect()
         try:
-            import mlx.core as mx
-            mx.clear_cache()
+            if self.backend == "mlx":
+                import mlx.core as mx
+                mx.clear_cache()
+            else:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
         except Exception:
             pass
 

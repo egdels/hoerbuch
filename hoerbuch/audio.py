@@ -9,7 +9,7 @@ import wave
 from pathlib import Path
 
 from .hilfen import fmt_dur
-from .konfig import MAX_PEAK_DB, TARGET_RMS_DB
+from .konfig import FFMPEG_HINT, MAX_PEAK_DB, TARGET_RMS_DB
 
 def normalize_level(audio, target_rms_db: float = TARGET_RMS_DB, max_peak_db: float = MAX_PEAK_DB):
     """Statische Verstärkung auf Ziel-RMS, begrenzt durch den maximalen Spitzenpegel."""
@@ -61,7 +61,7 @@ def build_output(chapter_files, src: Path, title: str, *, fmt: str = "m4b",
                  ausgabe: str | None = None, cover: str | None = None):
     """Setzt die Kapitel-WAVs zu einer M4B-Datei mit Kapitelmarken oder zu MP3s zusammen."""
     if not shutil.which("ffmpeg"):
-        print("ffmpeg fehlt (brew install ffmpeg). Die Kapitel liegen als WAV im Arbeitsordner.")
+        print(f"ffmpeg fehlt ({FFMPEG_HINT}). Die Kapitel liegen als WAV im Arbeitsordner.")
         return
     work = chapter_files[0][1].parent
 
@@ -69,7 +69,8 @@ def build_output(chapter_files, src: Path, title: str, *, fmt: str = "m4b",
         outdir = Path(ausgabe or src.with_suffix("").as_posix() + "_mp3")
         outdir.mkdir(exist_ok=True)
         for n, (t, wav, _) in enumerate(chapter_files, 1):
-            safe = re.sub(r"[^\w äöüÄÖÜß.-]", "", t)[:60].strip() or f"Kapitel {n}"
+            # Nur unbedenkliche Zeichen; unter Windows dürfen Namen nicht mit Punkt oder Leerzeichen enden
+            safe = re.sub(r"[^\w äöüÄÖÜß.-]", "", t)[:60].strip(" .") or f"Kapitel {n}"
             mp3 = outdir / f"{n:03d} - {safe}.mp3"
             subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(wav),
                             "-codec:a", "libmp3lame", "-q:a", "4",
@@ -80,7 +81,8 @@ def build_output(chapter_files, src: Path, title: str, *, fmt: str = "m4b",
         return
 
     listfile = work / "liste.txt"
-    listfile.write_text("".join(f"file '{w.resolve()}'\n" for _, w, _ in chapter_files),
+    # Pfade mit Schrägstrichen: so versteht sie ffmpeg auf allen Plattformen, auch unter Windows
+    listfile.write_text("".join(f"file '{w.resolve().as_posix()}'\n" for _, w, _ in chapter_files),
                         encoding="utf-8")
     meta = [";FFMETADATA1", f"title={title}", "genre=Hörbuch"]
     pos = 0
