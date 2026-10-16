@@ -85,13 +85,13 @@ py -3.12 -m venv .venv
 
 Meldet die PowerShell „Die Ausführung von Skripts ist auf diesem System deaktiviert“, einmalig `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` ausführen und `activate` wiederholen. In der klassischen Eingabeaufforderung (`cmd`) gibt es diese Sperre nicht.
 
-Dann zuerst PyTorch mit CUDA installieren. Den passenden Befehl für deine CUDA-Version liefert der Auswahlhelfer auf [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/) (Windows, Pip, CUDA), zum Beispiel:
+Dann zuerst PyTorch mit CUDA installieren, zusammen mit `torchaudio`, das `qwen-tts` ebenfalls braucht und das zur Torch-Version passen muss. Den passenden Befehl für deine CUDA-Version liefert der Auswahlhelfer auf [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/) (Windows, Pip, CUDA), zum Beispiel:
 
 ```powershell
-pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
 ```
 
-Erst danach das Projekt installieren, sonst zieht `qwen-tts` die reine CPU-Variante von PyTorch:
+Erst danach das Projekt installieren, sonst zieht `qwen-tts` die reine CPU-Variante von PyTorch und ein unpassendes `torchaudio` von PyPI:
 
 ```powershell
 pip install .
@@ -105,6 +105,19 @@ Für die optionale KI-Bereinigung (`--ki`) kommt `pip install ".[ki]"` dazu, das
 
 Die Befehle in dieser Anleitung sind für alle Plattformen gleich. Ob die Grafikkarte erkannt wurde, zeigt die Zeile „Lade Modell … auf <Grafikkarte>“ beim ersten Start von `probe`. Steht dort „auf CPU“, fehlt die CUDA-Variante von PyTorch.
 
+Beim ersten Start erscheinen unter Windows zwei Warnungen, die harmlos sind: „SoX could not be found!“ (das Paket `sox` wird von `qwen-tts` nur für die 25-Hz-Modelle gebraucht, die hier nicht verwendet werden) und ein Hinweis von Hugging Face, dass der Modell-Cache keine Symlinks nutzen kann. Einzelheiten dazu unter [Hinweise und Fehlerbehebung](#hinweise-und-fehlerbehebung).
+
+**Umgebungsvariablen:** Diese Anleitung nennt `HOERBUCH_BACKEND`, `HOERBUCH_DTYPE`, `HOERBUCH_STIMME` und `HF_HOME`. In der PowerShell setzt man sie so:
+
+```powershell
+$env:HOERBUCH_DTYPE = "fp16"      # gilt nur in dieser PowerShell-Sitzung
+setx HF_HOME "D:\hf-cache"        # dauerhaft, gilt ab dem nächsten Terminal
+```
+
+In der klassischen Eingabeaufforderung (`cmd`) lautet die Sitzungsvariante `set HOERBUCH_DTYPE=fp16`. `HF_HOME` lohnt sich, wenn das Systemlaufwerk knapp ist: Ohne die Variable landen die Modelle (bis zu 30 GB mit `--ki`) unter `C:\Users\<Name>\.cache\huggingface`.
+
+**Pfade:** Wo diese Anleitung `~` schreibt, ist unter Windows das Benutzerprofil gemeint, also `C:\Users\<Name>`. Die eigene Standardstimme liegt dann unter `C:\Users\<Name>\.hoerbuch\stimme.wav`.
+
 Unter Linux gilt derselbe Weg, mit `python3 -m venv` und `source ~/hoerbuch-venv/bin/activate` wie auf dem Mac.
 
 ### Modelle je Backend
@@ -115,7 +128,7 @@ Unter Linux gilt derselbe Weg, mit `python3 -m venv` und `source ~/hoerbuch-venv
 | Stimmen entwerfen (`--modell-design`) | `mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit` | `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` |
 | KI-Bereinigung (`--ki-modell`) | `mlx-community/Qwen3.5-9B-MLX-4bit` | `Qwen/Qwen3-8B` (4-bit über bitsandbytes, sonst bf16) |
 
-Die Werte in den Tabellen unten (Qualität, Tempo) wurden mit den MLX-Modellen gemessen. Für `--ki` unter PyTorch ist `Qwen/Qwen3-8B` als textbasiertes Modell gesetzt, weil Qwen3.5 9B im Transformers-Format ein multimodales Modell ist; mit `--ki-modell` lässt sich jedes Modell wählen, das `AutoModelForCausalLM` laden kann.
+Die Werte in den Tabellen unten (Qualität, Tempo) wurden mit den MLX-Modellen gemessen, und die Standardwerte in der Befehlsreferenz sind die MLX-Modelle; unter Windows und Linux gelten stattdessen die PyTorch-Spalte dieser Tabelle. Für `--ki` unter PyTorch ist `Qwen/Qwen3-8B` als textbasiertes Modell gesetzt, weil Qwen3.5 9B im Transformers-Format ein multimodales Modell ist; mit `--ki-modell` lässt sich jedes Modell wählen, das `AutoModelForCausalLM` laden kann.
 
 ## Ablauf in drei Schritten
 
@@ -150,7 +163,7 @@ Wird die bereinigte Datei noch einmal bereinigt, entsteht `buch.bereinigt.neu.tx
 hoerbuch bereinigen buch.txt --ki
 ```
 
-Nach der Regex-Bereinigung geht ein lokales Sprachmodell (Standard: Qwen3.5 9B, 4bit, etwa 6 GB) über den Text und kümmert sich um das, was Regeln nicht können:
+Nach der Regex-Bereinigung geht ein lokales Sprachmodell über den Text (Standard auf dem Mac: Qwen3.5 9B, 4bit, etwa 6 GB; unter Windows/Linux: Qwen3-8B in 4 bit über bitsandbytes, siehe [Modelle je Backend](#modelle-je-backend)) und kümmert sich um das, was Regeln nicht können:
 
 - römische Zahlen im richtigen Fall („Kaiser Wilhelms II.“ → „Kaiser Wilhelms des Zweiten“)
 - mehrdeutige Abkürzungen aus dem Kontext („S. 12“ → „Seite zwölf“, „Fr. Berger“ → „Frau Berger“, „ehem.“ → „ehemaliger“)
@@ -160,7 +173,7 @@ Nach der Regex-Bereinigung geht ein lokales Sprachmodell (Standard: Qwen3.5 9B, 
 
 Zahlen fasst das Modell nicht an. Das haben Läufe an längeren Texten gezeigt: Selbst das 9B-Modell vertauscht bei deutschen Zahlwörtern regelmäßig Zehner und Einer („85 %“ → „achtundfünfzig Prozent“, „2021“ → „zweitausendzwanzig“). Zahlen schreibt deshalb der Code mit num2words aus, und Vorschläge des Modells, die Ziffern enthalten, werden verworfen.
 
-Das Modell darf den Text auch sonst nicht umschreiben. Es liefert nur Ersetzungsvorschläge, und das Skript übernimmt jeden nur, wenn die Stelle wörtlich im Absatz vorkommt und der Vorschlag plausibel ist (keine Synonyme, keine Kürzungen). Jede Änderung steht in `buch.ki-protokoll.txt`. Rechnet mit etwa 5.000 Zeichen pro Minute auf einem M4, also rund 1,5 Stunden für einen Roman. Mit `--ki-modell NAME` lässt sich ein anderes mlx-community-Modell wählen, mit `--verbose` siehst du die rohen Modellantworten.
+Das Modell darf den Text auch sonst nicht umschreiben. Es liefert nur Ersetzungsvorschläge, und das Skript übernimmt jeden nur, wenn die Stelle wörtlich im Absatz vorkommt und der Vorschlag plausibel ist (keine Synonyme, keine Kürzungen). Jede Änderung steht in `buch.ki-protokoll.txt`. Rechnet mit etwa 5.000 Zeichen pro Minute auf einem M4, also rund 1,5 Stunden für einen Roman. Mit `--ki-modell NAME` lässt sich ein anderes Modell wählen (auf dem Mac aus der mlx-community, unter PyTorch jedes Modell im Transformers-Format), mit `--verbose` siehst du die rohen Modellantworten.
 
 ### 2. Probelauf: Stimmen anhören (einige Minuten)
 
@@ -194,7 +207,7 @@ Mit `--nur-ref` werden keine Stimmen entworfen, sondern nur die eigene Aufnahme 
 hoerbuch stimme aufnahme.wav --text "Genauer Wortlaut der Aufnahme."
 ```
 
-Nimm 10 bis 20 Sekunden ruhig gesprochenen Text auf, mono, ohne Hall und Hintergrundgeräusche, am besten in dem Ton, in dem das Buch klingen soll. Der Befehl bringt die Aufnahme auf Mono, 24 kHz und einheitliche Lautheit, kürzt Stille an den Enden und speichert sie mit dem Wortlaut unter `~/.hoerbuch/stimme.wav`. Ab dann verwenden `probe` und `vertonen` diese Stimme automatisch, wenn kein `--ref` angegeben ist. `probe` erzeugt zusätzlich zu den drei entworfenen Stimmen eine Hörprobe damit, `probe --nur-ref` nur diese. Ein anderer Speicherort lässt sich mit `--ziel` oder der Umgebungsvariable `HOERBUCH_STIMME` festlegen.
+Nimm 10 bis 20 Sekunden ruhig gesprochenen Text auf, mono, ohne Hall und Hintergrundgeräusche, am besten in dem Ton, in dem das Buch klingen soll. Der Befehl bringt die Aufnahme auf Mono, 24 kHz und einheitliche Lautheit, kürzt Stille an den Enden und speichert sie mit dem Wortlaut unter `~/.hoerbuch/stimme.wav` (Windows: `C:\Users\<Name>\.hoerbuch\stimme.wav`). Ab dann verwenden `probe` und `vertonen` diese Stimme automatisch, wenn kein `--ref` angegeben ist. `probe` erzeugt zusätzlich zu den drei entworfenen Stimmen eine Hörprobe damit, `probe --nur-ref` nur diese. Ein anderer Speicherort lässt sich mit `--ziel` oder der Umgebungsvariable `HOERBUCH_STIMME` festlegen.
 
 Klone nur deine eigene Stimme oder eine, deren Sprecher zugestimmt hat.
 
@@ -255,7 +268,7 @@ Schreibt `DATEI.bereinigt.txt` neben die Eingabedatei. Ist `DATEI` ein EPUB, wir
 |---|---|
 | `--ziffern-lassen` | Zahlen nicht ausschreiben |
 | `--ki` | zweite Stufe mit lokalem Sprachmodell (Abkürzungen, Einheiten, römische Zahlen, OCR-Fehler, Überschriften) |
-| `--ki-modell NAME` | Sprachmodell für `--ki` (Standard: `mlx-community/Qwen3.5-9B-MLX-4bit`) |
+| `--ki-modell NAME` | Sprachmodell für `--ki` (Standard Mac: `mlx-community/Qwen3.5-9B-MLX-4bit`, Windows/Linux: `Qwen/Qwen3-8B`) |
 | `--ki-protokoll DATEI` | Protokoll der KI-Änderungen (Standard: `DATEI.ki-protokoll.txt`) |
 | `--ki-bloecke N` | nur die ersten N Textblöcke prüfen, als Probelauf |
 | `--ki-ueberschriften` | Modell zusätzlich nach Kapitelüberschriften suchen lassen |
@@ -269,8 +282,8 @@ Schreibt `DATEI.bereinigt.txt` neben die Eingabedatei. Ist `DATEI` ein EPUB, wir
 | `--ref-text "…"` | genauer Wortlaut der eigenen Referenzaufnahme |
 | `--nur-ref` | keine Stimmen entwerfen, nur die eigene Referenz testen |
 | `--ausgabe ORDNER` | Ordner für die Proben (Standard: `probe`) |
-| `--modell NAME` | TTS-Modell (Standard: `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit`) |
-| `--modell-design NAME` | VoiceDesign-Modell (Standard: `mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit`) |
+| `--modell NAME` | TTS-Modell (Standard Mac: `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit`, Windows/Linux: `Qwen/Qwen3-TTS-12Hz-1.7B-Base`) |
+| `--modell-design NAME` | VoiceDesign-Modell (Standard Mac: `mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit`, Windows/Linux: `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`) |
 | `--verbose` | ausführliche Ausgabe |
 
 ### `stimme`
@@ -298,7 +311,7 @@ hoerbuch stimme AUFNAHME [--text "…"] [--ziel PFAD]
 | `--abschnitt N` | max. Zeichen pro Abschnitt (Standard 350, kürzer = weniger Aussetzer) |
 | `--temperatur T` | niedriger = gleichmäßiger, höher = lebendiger (Standard 0.8) |
 | `--ohne-bereinigung` | Text nicht automatisch bereinigen, wenn keine `# `-Kapitel gefunden werden |
-| `--modell NAME` | TTS-Modell |
+| `--modell NAME` | TTS-Modell (Standard wie bei `probe`) |
 | `--verbose` | ausführliche Ausgabe |
 
 ## Was die Bereinigung macht
@@ -347,11 +360,13 @@ Um einen einzelnen Abschnitt neu erzeugen zu lassen, lösche die zugehörige `k�
 - **Modell nicht gefunden (Mac):** Nimm die bf16-Variante, z. B. `--modell mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16` (und entsprechend `--modell-design …-VoiceDesign-bf16`).
 - **Windows: „auf CPU“ statt Grafikkarte:** PyTorch ist ohne CUDA installiert. In der aktivierten Umgebung `pip uninstall torch` und den CUDA-Befehl von pytorch.org erneut ausführen. `python -c "import torch; print(torch.cuda.is_available())"` muss `True` ergeben.
 - **Windows: Speicher der Grafikkarte reicht nicht:** Für `vertonen` genügt das 0.6B-Modell mit `--modell Qwen/Qwen3-TTS-12Hz-0.6B-Base`, die Qualität ist etwas geringer. Für `--ki` hilft `bitsandbytes` (4-bit) oder ein kleineres Modell per `--ki-modell`.
+- **Windows: „SoX could not be found!“ beim Start:** Harmlos. `qwen-tts` lädt das Python-Paket `sox` immer mit, ruft das SoX-Programm aber nur für die 25-Hz-Modelle auf; die hier verwendeten 12-Hz-Modelle brauchen es nicht.
+- **Windows: Hugging Face warnt wegen fehlender Symlinks:** Ohne Symlinks legt der Modell-Cache jede Datei doppelt ab, der Platzbedarf aus der Hardware-Tabelle verdoppelt sich dann. Abhilfe: in den Windows-Einstellungen den Entwicklermodus einschalten (System → Für Entwickler) und die Modelle danach erneut laden. Wer den doppelten Platz in Kauf nimmt, schaltet die Warnung mit `HF_HUB_DISABLE_SYMLINKS_WARNING=1` ab.
 - **Zu viele Aussetzer oder Wiederholungen:** `--abschnitt 250` setzt kürzere Abschnitte, `--temperatur 0.6` macht die Ausgabe gleichmäßiger.
 - **`ffmpeg fehlt`:** `brew install ffmpeg` (Mac) bzw. `winget install ffmpeg` (Windows). Die Kapitel liegen trotzdem als WAV im Arbeitsordner und können später exportiert werden.
 - **Eigene Referenzaufnahme:** 10–20 Sekunden, ohne Hintergrundgeräusche, möglichst in dem Tempo und Ton, in dem das Buch gelesen werden soll. Der Wortlaut muss exakt stimmen.
 - **Dauer abschätzen:** Zeichen des Buchs geteilt durch das im Probelauf angezeigte Tempo (Zeichen/Minute). Auf einem M4 sind es rund 1.000 Zeichen pro Minute, ein Roman mit 500.000 Zeichen braucht also etwa 8 Stunden.
-- **Hugging-Face-Cache:** Die Modelle landen im Standard-Cache unter `~/.cache/huggingface`. Ist die Umgebungsvariable `HF_HOME` gesetzt, liegen sie entsprechend woanders.
+- **Hugging-Face-Cache:** Die Modelle landen im Standard-Cache unter `~/.cache/huggingface` (Windows: `C:\Users\<Name>\.cache\huggingface`). Ist die Umgebungsvariable `HF_HOME` gesetzt, liegen sie entsprechend woanders; unter Windows z. B. dauerhaft mit `setx HF_HOME "D:\hf-cache"`.
 
 ## Schnelltest
 
