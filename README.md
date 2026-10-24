@@ -4,7 +4,7 @@
 
 `hoerbuch` verwandelt eine EPUB- oder TXT-Datei in ein Hörbuch mit Kapitelmarken (M4B) oder in eine MP3-Datei pro Kapitel. Die Sprachausgabe läuft komplett lokal mit [Qwen3-TTS](https://huggingface.co/collections/Qwen/qwen3-tts): auf Apple Silicon (M1–M4) über [mlx-audio](https://github.com/Blaizzy/mlx-audio), unter Windows und Linux über das offizielle PyTorch-Paket [qwen-tts](https://github.com/QwenLM/Qwen3-TTS). Es werden keine Daten ins Internet geschickt, nur die Modelle werden beim ersten Start einmalig heruntergeladen.
 
-Das Programm wählt das Backend selbst: auf einem Mac mit Apple Silicon MLX, sonst PyTorch. Mit der Umgebungsvariable `HOERBUCH_BACKEND=mlx` oder `=torch` lässt sich das erzwingen. Entwickelt und durchgemessen ist die Kette auf dem Mac; der PyTorch-Weg nutzt dieselben Modelle in ihrer Originalfassung und dieselbe Textstufe. Unter Windows ist er auf der CPU einmal komplett durchgelaufen (siehe [Stand der Erprobung](#stand-der-erprobung)), mit CUDA-Grafikkarte aber noch nicht erprobt. Rückmeldungen dazu sind willkommen.
+Das Programm wählt das Backend selbst: auf einem Mac mit Apple Silicon MLX, sonst PyTorch. Mit der Umgebungsvariable `HOERBUCH_BACKEND=mlx` oder `=torch` lässt sich das erzwingen. Entwickelt und durchgemessen ist die Kette auf dem Mac; der PyTorch-Weg nutzt dieselben Modelle in ihrer Originalfassung und dieselbe Textstufe. Unter Windows wurde er sowohl auf der CPU als auch mit einer NVIDIA-CUDA-Grafikkarte erprobt (siehe [Stand der Erprobung](#stand-der-erprobung)). Rückmeldungen zu weiteren Grafikkarten sind willkommen.
 
 ## Voraussetzungen
 
@@ -444,6 +444,26 @@ Die komplette Kette wurde mit mlx-audio 0.5.8, mlx-lm 0.32, Python 3.14 und den 
 | Testbuch (3.800 Zeichen) | 4 Minuten Hörbuch in gut 3 Minuten |
 
 Ein Roman mit 500.000 Zeichen braucht demnach etwa 8 Stunden. Falls etwas hakt, hilft die vollständige Fehlermeldung mit `--verbose` weiter.
+
+### Windows mit NVIDIA-Grafikkarte (PyTorch/CUDA)
+
+Der Windows-/CUDA-Weg wurde im Oktober 2026 auf einem Windows-11-Rechner mit einer **NVIDIA GeForce RTX 5070 Ti Laptop GPU (12 GB Grafikspeicher)** erprobt. Die Laptop-GPU ist von der oben genannten Desktop-RTX 5070 Ti mit 16 GB zu unterscheiden. Verwendete Umgebung:
+
+| Komponente | Version / Konfiguration |
+|---|---|
+| Python | 3.12.10 |
+| PyTorch / torchaudio | 2.11.0+cu128 / 2.11.0+cu128 |
+| qwen-tts | 0.1.1 |
+| transformers | 4.57.3 |
+| NVIDIA-Treiber | 610.88 |
+| FFmpeg | 9.0.2 |
+| TTS-Modelle | Qwen3-TTS-12Hz-1.7B-VoiceDesign und Qwen3-TTS-12Hz-1.7B-Base |
+
+Getestet wurden Textbereinigung, Stimmentwurf und Hörproben sowie die Vertonung mit einer Referenzaufnahme. PyTorch erkennt die CUDA-Grafikkarte (`torch.cuda.is_available()` ergibt `True`). Die Hinweise zu fehlendem FlashAttention und SoX verhindern die Nutzung der hier verwendeten 12-Hz-Modelle nicht.
+
+Beim abschließenden Export muss FFmpeg für den laufenden Prozess im `PATH` erreichbar sein. War FFmpeg erst nach dem Öffnen des Terminals eingetragen worden, musste dessen Umgebung aktualisiert beziehungsweise das Terminal einschließlich der übergeordneten Anwendung neu gestartet werden. Bereits erzeugte WAV-Abschnitte können anschließend mit demselben `vertonen`-Befehl weiterverwendet werden.
+
+Für diese Konfiguration liegen keine systematischen Geschwindigkeitsmessungen vor. Die optionale KI-Textbereinigung (`--ki`) ist durch diesen Test nicht abgedeckt.
 
 ### Windows ohne Grafikkarte (PyTorch auf der CPU)
 
