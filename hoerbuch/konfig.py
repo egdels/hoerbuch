@@ -30,16 +30,19 @@ MODELLE = {
         "base": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
         "design": "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit",
         "ki": "mlx-community/Qwen3.5-9B-MLX-4bit",
+        "stt": "mlx-community/whisper-large-v3-turbo-asr-fp16",
     },
     "torch": {
         "base": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
         "design": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
         "ki": "Qwen/Qwen3-8B",
+        "stt": "openai/whisper-large-v3-turbo",
     },
 }
 MODEL_BASE = MODELLE[BACKEND]["base"]
 MODEL_DESIGN = MODELLE[BACKEND]["design"]
 MODEL_KI = MODELLE[BACKEND]["ki"]        # Sprachmodell für "bereinigen --ki"
+MODEL_STT = MODELLE[BACKEND]["stt"]      # Spracherkennung für den Wortlaut der Referenz
 
 def torch_geraet_und_typ():
     """(Gerät, dtype, Beschreibung) für das PyTorch-Backend: CUDA mit bfloat16 ab NVIDIA Ampere
@@ -85,6 +88,13 @@ MIN_CHARS_PER_SEC = 5.0      # langsamer → vermutlich Wiederholung/Gestammel
 MAX_CHARS_PER_SEC = 32.0     # schneller → vermutlich Text verschluckt
 MAX_TRIES = 3
 
+# Stimmdrift: Jeder Abschnitt wird über den Sprecher-Encoder von Qwen3-TTS mit der Referenz
+# verglichen (Kosinus-Ähnlichkeit). Gemessen an vier Referenzstimmen: saubere Abschnitte ≥ 0,967
+# (meist ≈ 0,99), in eine andere Stimme gekippte 0,93–0,95, fremde Sprecher 0,91–0,94.
+# Unter 3 Sekunden streut das Maß zu stark und wird nicht geprüft.
+MIN_SPEAKER_SIMILARITY = 0.96
+SPEAKER_MIN_SECONDS = 3.0
+
 # Pegel: jeder erzeugte Abschnitt wird auf denselben Effektivpegel gebracht, damit die
 # Lautstärke über das Buch nicht driftet (Hörbuch-Richtwert: RMS −18 bis −23 dBFS, Spitze ≤ −3 dB).
 TARGET_RMS_DB = -20.0
@@ -111,7 +121,24 @@ VOICE_DESIGNS = {
     "erzaehler_alt": "Ein älterer männlicher Erzähler mit sonorer, leicht rauer Stimme. "
                      "Spricht bedächtig und atmosphärisch in klarem Hochdeutsch, "
                      "wie ein Märchenerzähler am Kaminfeuer.",
+    "erzaehler_sf": "Ein markanter männlicher Sprecher mittleren Alters mit tiefer, fester "
+                    "Stimme und sehr klarer Artikulation, wie ein erfahrener Synchronsprecher. "
+                    "Spricht sachlich und konzentriert, mit unterschwelliger Spannung und "
+                    "leichtem Nachdruck auf wichtigen Wörtern, in zügigem, aber ruhigem Tempo. "
+                    "Hochdeutsch, ohne Pathos.",
 }
+DESIGN_SEED = 42             # Seed für den Stimmentwurf; andere Werte ergeben andere Varianten
+
+
+def stimmentwuerfe(eigene: list[str] | None, nur_eigene: bool = False) -> dict[str, str]:
+    """Name → Beschreibung für den Probelauf: die eingebauten Stimmen plus eigene Beschreibungen
+    (--design, benannt entwurf_1, entwurf_2 …). Mit nur_eigene nur die eigenen."""
+    designs = {} if nur_eigene else dict(VOICE_DESIGNS)
+    for n, desc in enumerate(eigene or [], 1):
+        desc = " ".join(desc.split())
+        if desc:
+            designs[f"entwurf_{n}"] = desc
+    return designs
 
 
 def default_voice() -> Path | None:

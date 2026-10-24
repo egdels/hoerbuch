@@ -149,7 +149,7 @@ Liest die Kapitel in Buchreihenfolge und schreibt `<Buchtitel>.txt` neben das EP
 hoerbuch bereinigen buch.txt
 ```
 
-Erzeugt `buch.bereinigt.txt` und gibt aus, was erkannt und entfernt wurde: Kodierung, Seitenzahlen, Kopf-/Fußzeilen, aufgelöste Silbentrennungen, ersetzte Abkürzungen, URLs und die gefundenen Kapitel. Am Ende steht eine Schätzung der Hörzeit.
+Erzeugt `buch.bereinigt.txt` und gibt aus, was erkannt und entfernt wurde: Kodierung, Seitenzahlen, Kopf-/Fußzeilen, aufgelöste Silbentrennungen, ersetzte Abkürzungen, URLs und die gefundenen Kapitel. Eine kurze Zeile ohne Satzschluss direkt unter einer Kapitelzeile (auch mit Leerzeile dazwischen) gilt als Untertitel und wird angehängt: aus „Kapitel 1“ und „Der alte Bahnhof“ wird `# Kapitel 1: Der alte Bahnhof`. Am Ende steht eine Schätzung der Hörzeit.
 
 Kapitel stehen in der bereinigten Datei als Zeilen mit `# ` am Anfang, zum Beispiel `# Kapitel 3: Die Rückkehr`. Diese Datei solltest du vor dem Vertonen kurz durchsehen:
 
@@ -184,35 +184,49 @@ Das Modell darf den Text auch sonst nicht umschreiben. Es liefert nur Ersetzungs
 hoerbuch probe buch.bereinigt.txt
 ```
 
-Das Skript entwirft drei Erzählerstimmen per Beschreibung (VoiceDesign-Modell) und spricht mit jeder davon einen Absatz aus deinem Buch. Im Ordner `probe/` entstehen:
+Das Skript entwirft vier Erzählerstimmen per Beschreibung (VoiceDesign-Modell) und spricht mit jeder davon einen Absatz aus deinem Buch. Im Ordner `probe/` entstehen:
 
 | Datei | Inhalt |
 |---|---|
 | `stimme_erzaehler_m.wav` | Referenzstimme: ruhiger, warmer männlicher Sprecher |
 | `stimme_erzaehlerin_w.wav` | Referenzstimme: warme, klare weibliche Sprecherin |
 | `stimme_erzaehler_alt.wav` | Referenzstimme: älterer Erzähler mit sonorer Stimme |
+| `stimme_erzaehler_sf.wav` | Referenzstimme: markanter, sachlicher Sprecher mit unterschwelliger Spannung, im Stil klassischer Synchronsprecher (für Science-Fiction und Thriller) |
 | `stimme_*.txt` | Wortlaut der jeweiligen Referenzaufnahme |
 | `probe_*.wav` | Hörprobe mit einem Absatz aus deinem Buch, so klingt später das ganze Hörbuch |
 
 Hör dir die `probe_*.wav`-Dateien an und merk dir die passende `stimme_*.wav`. Am Ende zeigt der Probelauf das Tempo in Zeichen pro Minute. Damit kannst du abschätzen, wie lange das ganze Buch dauert.
 
-**Eigene Stimme testen:** Du kannst zusätzlich eine eigene Aufnahme (WAV, 10–20 Sekunden, sauber gesprochen) mitgeben. Der genaue Wortlaut muss dazu angegeben werden:
+**Eigene Stimmbeschreibung:** Mit `--design` entwirfst du zusätzliche Stimmen nach eigener Beschreibung, mehrfach angebbar. `--nur-design` lässt die vier eingebauten weg, `--seed` liefert eine andere Variante derselben Beschreibung:
 
 ```bash
-hoerbuch probe buch.bereinigt.txt --ref meine_stimme.wav --ref-text "Genauer Wortlaut der Aufnahme."
+hoerbuch probe buch.bereinigt.txt --nur-design --seed 7 \
+  --design "Eine junge Sprecherin mit heller, klarer Stimme, spricht lebhaft und schnell, leicht ironisch."
 ```
 
-Mit `--nur-ref` werden keine Stimmen entworfen, sondern nur die eigene Aufnahme getestet. Liegt neben `meine_stimme.wav` eine Datei `meine_stimme.txt` mit dem Wortlaut, kann `--ref-text` entfallen.
+Die Dateien heißen `stimme_entwurf_1.wav` (mit `--seed 7`: `stimme_entwurf_1_seed7.wav`), die Beschreibung liegt daneben in `stimme_entwurf_1.beschreibung.txt`. Beschreibe Alter, Tonlage, Klang, Tempo und Haltung. Namen von Sprechern oder Rollen helfen nicht: Das Modell kennt keine Personen und setzt nur Klangmerkmale um. Die eingebauten Beschreibungen in `hoerbuch/konfig.py` (`VOICE_DESIGNS`) sind gute Vorlagen.
+
+**Eigene Stimme testen:** Du kannst zusätzlich eine eigene Aufnahme (WAV, 10–20 Sekunden, sauber gesprochen) mitgeben:
+
+```bash
+hoerbuch probe buch.bereinigt.txt --ref meine_stimme.wav
+```
+
+Mit `--nur-ref` werden keine Stimmen entworfen, sondern nur die eigene Aufnahme getestet. Den Wortlaut der Aufnahme sucht `probe` in `--ref-text "…"` oder in einer Datei `meine_stimme.txt` daneben. Fehlt beides, schreibt Whisper ihn mit (siehe [Wortlaut der Aufnahme](#wortlaut-der-aufnahme)).
 
 ### Eigene Stimme als Standard (optional, einmalig)
 
 ```bash
-hoerbuch stimme aufnahme.wav --text "Genauer Wortlaut der Aufnahme."
+hoerbuch stimme aufnahme.wav
 ```
 
-Nimm 10 bis 20 Sekunden ruhig gesprochenen Text auf, mono, ohne Hall und Hintergrundgeräusche, am besten in dem Ton, in dem das Buch klingen soll. Der Befehl bringt die Aufnahme auf Mono, 24 kHz und einheitliche Lautheit, kürzt Stille an den Enden und speichert sie mit dem Wortlaut unter `~/.hoerbuch/stimme.wav` (Windows: `C:\Users\<Name>\.hoerbuch\stimme.wav`). Ab dann verwenden `probe` und `vertonen` diese Stimme automatisch, wenn kein `--ref` angegeben ist. `probe` erzeugt zusätzlich zu den drei entworfenen Stimmen eine Hörprobe damit, `probe --nur-ref` nur diese. Ein anderer Speicherort lässt sich mit `--ziel` oder der Umgebungsvariable `HOERBUCH_STIMME` festlegen.
+Nimm 10 bis 20 Sekunden ruhig gesprochenen Text auf, mono, ohne Hall und Hintergrundgeräusche, am besten in dem Ton, in dem das Buch klingen soll. Der Befehl bringt die Aufnahme auf Mono, 24 kHz und einheitliche Lautheit, kürzt Stille an den Enden und speichert sie mit dem Wortlaut unter `~/.hoerbuch/stimme.wav` (Windows: `C:\Users\<Name>\.hoerbuch\stimme.wav`). Ab dann verwenden `probe` und `vertonen` diese Stimme automatisch, wenn kein `--ref` angegeben ist. `probe` erzeugt zusätzlich zu den vier entworfenen Stimmen eine Hörprobe damit, `probe --nur-ref` nur diese. Ein anderer Speicherort lässt sich mit `--ziel` oder der Umgebungsvariable `HOERBUCH_STIMME` festlegen.
 
 Klone nur deine eigene Stimme oder eine, deren Sprecher zugestimmt hat.
+
+#### Wortlaut der Aufnahme
+
+Zum Stimmklonen braucht Qwen3-TTS den genauen Text, der in der Aufnahme gesprochen wird. Du kannst ihn mit `--text "…"` angeben oder als `aufnahme.txt` neben die Aufnahme legen. Fehlt beides, schreibt die Spracherkennung Whisper (`whisper-large-v3-turbo`, beim ersten Mal ≈1,6 GB Download) den Wortlaut mit. Ziffern werden dabei als Zahlwörter ausgeschrieben, so wie sie gesprochen wurden. Das Ergebnis wird angezeigt und als `.txt` neben der Stimme gespeichert, Whisper läuft also nur einmal. Lies den Text gegen und korrigiere die `.txt` bei Bedarf: Weicht der Wortlaut von der Aufnahme ab, etwa bei Namen oder ausgelassenen Wörtern, klingt die geklonte Stimme schlechter oder spricht Reste der Referenz mit. Abweichende Satzzeichen sind unkritisch. Dasselbe gilt für `probe --ref` und `vertonen --ref` mit einer Aufnahme ohne `.txt`.
 
 Erfahrungen aus vier Testaufnahmen, verglichen am Testbuch:
 
@@ -236,8 +250,11 @@ Varianten:
 # Eine MP3-Datei pro Kapitel statt einer M4B-Datei
 hoerbuch vertonen buch.bereinigt.txt --ref probe/stimme_erzaehlerin_w.wav --format mp3
 
-# Mit Cover
-hoerbuch vertonen buch.bereinigt.txt --ref probe/stimme_erzaehler_m.wav --titel "Mein Buch" --cover cover.jpg
+# Mit Cover und Autor (landen als Tags in der Datei)
+hoerbuch vertonen buch.bereinigt.txt --ref probe/stimme_erzaehler_m.wav --titel "Mein Buch" --autor "Erika Muster" --cover cover.jpg
+
+# Kleinste Datei: Opus mit 32 kbit/s
+hoerbuch vertonen buch.bereinigt.txt --ref probe/stimme_erzaehler_m.wav --format opus
 
 # Gleichmäßigere Betonung (Standard 0.8)
 hoerbuch vertonen buch.bereinigt.txt --ref probe/stimme_erzaehler_m.wav --temperatur 0.6
@@ -282,7 +299,7 @@ Schreibt `DATEI.bereinigt.txt` neben die Eingabedatei. Ist `DATEI` ein EPUB, wir
 | Option | Bedeutung |
 |---|---|
 | `--ref WAV` | eigene Referenzaufnahme (10–20 s) zusätzlich testen; ohne Angabe wird eine eingerichtete Standardstimme mitgetestet |
-| `--ref-text "…"` | genauer Wortlaut der eigenen Referenzaufnahme |
+| `--ref-text "…"` | genauer Wortlaut der eigenen Referenzaufnahme (sonst aus gleichnamiger `.txt`, sonst mit Whisper mitgeschrieben) |
 | `--nur-ref` | keine Stimmen entwerfen, nur die eigene Referenz testen |
 | `--ausgabe ORDNER` | Ordner für die Proben (Standard: `probe`) |
 | `--modell NAME` | TTS-Modell (Standard Mac: `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit`, Windows/Linux: `Qwen/Qwen3-TTS-12Hz-1.7B-Base`) |
@@ -292,20 +309,21 @@ Schreibt `DATEI.bereinigt.txt` neben die Eingabedatei. Ist `DATEI` ein EPUB, wir
 ### `stimme`
 
 ```
-hoerbuch stimme AUFNAHME [--text "…"] [--ziel PFAD]
+hoerbuch stimme AUFNAHME [--text "…"] [--ziel PFAD] [--modell-stt MODELL]
 ```
 
 | Option | Bedeutung |
 |---|---|
-| `--text "…"` | genauer Wortlaut der Aufnahme (sonst aus gleichnamiger `.txt`) |
+| `--text "…"` | genauer Wortlaut der Aufnahme (sonst aus gleichnamiger `.txt`, sonst mit Whisper mitgeschrieben) |
 | `--ziel PFAD` | Speicherort (Standard `~/.hoerbuch/stimme.wav`) |
+| `--modell-stt MODELL` | Spracherkennung für den Wortlaut (Standard `mlx-community/whisper-large-v3-turbo-asr-fp16`, unter PyTorch `openai/whisper-large-v3-turbo`) |
 
 ### `vertonen`
 
 | Option | Bedeutung |
 |---|---|
 | `--ref WAV` | Referenzstimme, z. B. `probe/stimme_erzaehler_m.wav`; ohne Angabe die eingerichtete eigene Stimme |
-| `--ref-text "…"` | Wortlaut der Referenz (sonst aus der gleichnamigen `.txt`) |
+| `--ref-text "…"` | Wortlaut der Referenz (sonst aus der gleichnamigen `.txt`, sonst mit Whisper mitgeschrieben) |
 | `--titel "…"` | Titel des Hörbuchs (Standard: Dateiname) |
 | `--cover BILD` | Coverbild (JPG/PNG) für die M4B-Datei |
 | `--format m4b\|mp3` | `m4b` = eine Datei mit Kapitelmarken (Standard), `mp3` = eine Datei pro Kapitel |
@@ -348,15 +366,27 @@ buch.bereinigt_audio/       Arbeitsordner
 buch.bereinigt.m4b          fertiges Hörbuch (oder buch.bereinigt_mp3/ bei --format mp3)
 ```
 
-Der Arbeitsordner kann nach dem Export gelöscht werden. Solange er existiert, lässt sich der Export jederzeit ohne neue Berechnung wiederholen.
+Der Arbeitsordner kann nach dem Export gelöscht werden. Solange er existiert, lässt sich der Export jederzeit ohne neue Berechnung wiederholen, auch in einem anderen Format: `vertonen` erneut mit `--format …` aufrufen, die fertigen Abschnitte werden wiederverwendet.
+
+### Ausgabeformate
+
+| `--format` | Ergebnis | Kapitelmarken | Cover | Standard-Bitrate |
+|---|---|---|---|---|
+| `m4b` (Standard) | eine Datei, AAC | ja | ja | 64 kbit/s |
+| `mp3-buch` | eine MP3-Datei | ja (ID3-Kapitel, u. a. Apple Books, VLC, Smart AudioBook Player) | ja | 64 kbit/s |
+| `mp3` | eine MP3-Datei je Kapitel, nummeriert | über die Dateien | ja | 64 kbit/s |
+| `opus` | eine Datei, Opus | ja (VLC, Android-Player; Apple-Geräte ignorieren sie) | nein | 32 kbit/s |
+| `wav` | eine WAV-Datei je Kapitel, unkomprimiert | über die Dateien | nein | – |
+
+Alle Ausgaben sind mono. `--bitrate 96k` setzt eine andere Bitrate, `--autor` schreibt den Autor als Interpret in die Tags, `--ausgabe` legt Dateinamen oder Zielordner fest. Opus liefert bei gleicher Bitrate die beste Sprachqualität und etwa halb so große Dateien wie M4B. `wav` braucht kein ffmpeg und eignet sich zur Nachbearbeitung in einem Audio-Editor.
 
 ## Qualitätskontrolle
 
-Jeder Abschnitt wird auf plausible Länge geprüft. Eine deutsche Erzählstimme spricht etwa 12–17 Zeichen pro Sekunde. Liegt ein Abschnitt weit darunter (vermutlich Wiederholung oder Gestammel) oder weit darüber (vermutlich Text verschluckt), wird er bis zu dreimal neu erzeugt. Bleibt er auffällig, wird er trotzdem verwendet und in `auffaellig.txt` im Arbeitsordner protokolliert.
+Jeder Abschnitt wird auf plausible Länge geprüft. Eine deutsche Erzählstimme spricht etwa 12–17 Zeichen pro Sekunde. Liegt ein Abschnitt weit darunter (vermutlich Wiederholung oder Gestammel) oder weit darüber (vermutlich Text verschluckt), wird er bis zu dreimal neu erzeugt. Ebenso, wenn der Schluss abgehackt ist, also der Pegel kurz vor dem Ende noch nicht abfällt; das passiert dem Modell gelegentlich bei sehr kurzen Texten. Außerdem wird jeder Abschnitt ab drei Sekunden über den Sprecher-Encoder von Qwen3-TTS mit der Referenz verglichen. Das Modell klont die Stimme für jeden Abschnitt neu und kippt dabei gelegentlich in eine andere Stimme, besonders bei wörtlicher Rede und schwachen Referenzen (komprimierte oder bearbeitete Aufnahmen, etwa aus dem Radio). Liegt die Ähnlichkeit unter 0,96 (saubere Abschnitte liegen um 0,99, fremde Stimmen bei 0,91–0,94), wird der Abschnitt ebenfalls neu erzeugt. Bleibt ein Abschnitt auffällig, wird er trotzdem verwendet und mit dem Grund in `auffaellig.txt` im Arbeitsordner protokolliert; bei der Stimme wird dabei der Versuch behalten, der der Referenz am nächsten kommt. Damit das Modell Sätze sauber abschließt, bekommt jeder Absatz ohne Schlusszeichen beim Vertonen einen Punkt angehängt.
 
 Jeder Abschnitt wird außerdem auf denselben Effektivpegel gebracht (RMS −20 dBFS, Spitze höchstens −2 dB), damit die Lautstärke über das Buch nicht driftet. Das Voice-Cloning-Modell wird sonst innerhalb längerer Passagen allmählich leiser, besonders bei leisen Referenzaufnahmen.
 
-Um einen einzelnen Abschnitt neu erzeugen zu lassen, lösche die zugehörige `k…_….wav` im Arbeitsordner und starte `vertonen` erneut. Nur die fehlenden Abschnitte werden nachberechnet.
+Um einen einzelnen Abschnitt neu erzeugen zu lassen, lösche die zugehörige `k…_….wav` im Arbeitsordner und starte `vertonen` erneut. Nur die fehlenden Abschnitte werden nachberechnet. Änderst du den Text, werden nur die Abschnitte neu erzeugt, deren Wortlaut sich geändert hat; `plan.json` im Arbeitsordner merkt sich dazu je Abschnitt eine Prüfsumme. Eingefügte oder gelöschte Absätze verschieben die übrigen Abschnitte nur, sie werden nicht neu berechnet. Bei einer anderen Referenzstimme wird alles neu erzeugt.
 
 ## Hinweise und Fehlerbehebung
 
@@ -365,11 +395,13 @@ Um einen einzelnen Abschnitt neu erzeugen zu lassen, lösche die zugehörige `k�
 - **Windows: Speicher der Grafikkarte reicht nicht:** Für `vertonen` genügt das 0.6B-Modell mit `--modell Qwen/Qwen3-TTS-12Hz-0.6B-Base`, die Qualität ist etwas geringer. Für `--ki` hilft `bitsandbytes` (4-bit) oder ein kleineres Modell per `--ki-modell`.
 - **Windows: „SoX could not be found!“ beim Start:** Harmlos. `qwen-tts` lädt das Python-Paket `sox` immer mit, ruft das SoX-Programm aber nur für die 25-Hz-Modelle auf; die hier verwendeten 12-Hz-Modelle brauchen es nicht.
 - **Windows: Hugging Face warnt wegen fehlender Symlinks:** Harmlos. Ohne Symlinks legt der Cache die Modelldateien direkt im Snapshot-Ordner ab statt sie zu verlinken; im Test belegte jedes Modell damit die erwarteten 4,3 GB. Mehr Platz kostet das nur, wenn dasselbe Modell in mehreren Revisionen geladen wird. Wer die Warnung nicht sehen will, schaltet in den Windows-Einstellungen den Entwicklermodus ein (System → Für Entwickler) oder setzt `HF_HUB_DISABLE_SYMLINKS_WARNING=1`.
+- **Stimme wechselt zwischendurch** (etwa in eine Männerstimme bei wörtlicher Rede): Die Stimmprüfung erzeugt solche Abschnitte bis zu dreimal neu. Bleiben viele in `auffaellig.txt` mit „Stimme weicht ab“ stehen, ist die Referenz zu schwach: eine saubere Aufnahme mit nur einer Stimme wählen und `--temperatur 0.5` versuchen.
 - **Zu viele Aussetzer oder Wiederholungen:** `--abschnitt 250` setzt kürzere Abschnitte, `--temperatur 0.6` macht die Ausgabe gleichmäßiger.
 - **`ffmpeg fehlt`:** `brew install ffmpeg` (Mac) bzw. `winget install ffmpeg` (Windows). Die Kapitel liegen trotzdem als WAV im Arbeitsordner und können später exportiert werden.
-- **Eigene Referenzaufnahme:** 10–20 Sekunden, ohne Hintergrundgeräusche, möglichst in dem Tempo und Ton, in dem das Buch gelesen werden soll. Der Wortlaut muss exakt stimmen.
+- **Eigene Referenzaufnahme:** 10–20 Sekunden, ohne Hintergrundgeräusche, möglichst in dem Tempo und Ton, in dem das Buch gelesen werden soll. Der Wortlaut muss exakt stimmen; einen von Whisper mitgeschriebenen Text in der `.txt` gegenlesen.
 - **Dauer abschätzen:** Zeichen des Buchs geteilt durch das im Probelauf angezeigte Tempo (Zeichen/Minute). Auf einem M4 sind es rund 1.000 Zeichen pro Minute, ein Roman mit 500.000 Zeichen braucht also etwa 8 Stunden.
 - **Hugging-Face-Cache:** Die Modelle landen im Standard-Cache unter `~/.cache/huggingface` (Windows: `C:\Users\<Name>\.cache\huggingface`). Ist die Umgebungsvariable `HF_HOME` gesetzt, liegen sie entsprechend woanders; unter Windows z. B. dauerhaft mit `setx HF_HOME "D:\hf-cache"`.
+- **Hängt beim „Lade Modell …“:** Vor dem Laden prüft die Hugging-Face-Bibliothek online, ob das Modell aktuell ist. Ohne Internet oder bei gestörter Verbindung (etwa IPv6 ohne Route) kann das minutenlang hängen. Mit `HF_HUB_OFFLINE=1 hoerbuch probe …` (Windows PowerShell: `$env:HF_HUB_OFFLINE=1`) wird nur der lokale Cache benutzt; das geht, sobald die Modelle einmal geladen wurden.
 
 ## Schnelltest
 

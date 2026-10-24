@@ -288,13 +288,16 @@ def clean_text(text: str, report: CleanReport) -> str:
                 paragraphs.append(HEAD_MARK + s)
                 i += 1
                 continue
-            # Untertitel direkt darunter ("Kapitel 1" / "Der Anfang" / Leerzeile)
-            if (not one_par_per_line and not blank(i + 1) and blank(i + 2)
-                    and len(raw_lines[i + 1].strip()) <= 60
-                    and not re.search(r"[.!?…,;:\"“”»«]$", raw_lines[i + 1].strip())):
-                paragraphs.append(HEAD_MARK + s + ": " + raw_lines[i + 1].strip())
-                i += 2
-                continue
+            # Untertitel darunter, direkt oder nach einer Leerzeile ("Kapitel 1" / "Der Anfang"):
+            # kurze Zeile ohne Satzschluss, danach Leerzeile, selbst keine Überschrift
+            j = i + 1 if not blank(i + 1) else (i + 2 if not blank(i + 2) else None)
+            if j is not None and not one_par_per_line and blank(j + 1):
+                sub = raw_lines[j].strip()
+                if (len(sub) <= 60 and not re.search(r"[.!?…,;:\"“”»«]$", sub)
+                        and not sub.startswith("#") and not is_heading(sub) and not SCENE_RE.match(sub)):
+                    paragraphs.append(HEAD_MARK + s + ": " + sub)
+                    i = j + 1
+                    continue
             paragraphs.append(HEAD_MARK + s)
             i += 1
             continue

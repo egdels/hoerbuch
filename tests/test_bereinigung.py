@@ -71,8 +71,8 @@ def test_testbuch(testbuch_text):
     assert "Absender" in out and "Handschrift" in out
 
     # Kapitel als "# "-Zeilen, Szenenwechsel als eigener Absatz
-    assert report.chapters == ["Kapitel 1", "Kapitel 2"]
-    assert "\n# Kapitel 1\n" in "\n" + out
+    assert report.chapters == ["Kapitel 1: Der alte Bahnhof", "Kapitel 2: Die Nachricht"]
+    assert "\n# Kapitel 1: Der alte Bahnhof\n" in "\n" + out
     assert "\n\n***\n\n" in out
 
     # Abkürzungen und Zahlen
@@ -114,3 +114,13 @@ def test_roemische_kapitelnummer_wird_arabisch():
     report = CleanReport()
     out = clean_text(text, report)
     assert "# Kapitel 4\n" in out
+
+
+def test_untertitel_nach_leerzeile_wird_angehaengt():
+    out = clean_text("Kapitel 1\n\nDer alte Bahnhof\n\nEs war still. Niemand kam.\n\n"
+                     "Kapitel 2\nDie Nachricht\n\nEin Brief lag da.\n\n"
+                     "Kapitel 3\n\nKapitel 4\n\nText im vierten Kapitel.\n", CleanReport())
+    assert "# Kapitel 1: Der alte Bahnhof\n" in out        # mit Leerzeile dazwischen
+    assert "# Kapitel 2: Die Nachricht\n" in out           # direkt darunter
+    assert "# Kapitel 3\n" in out and "# Kapitel 4\n" in out   # Überschrift ist kein Untertitel
+    assert "Es war still. Niemand kam." in out

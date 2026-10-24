@@ -4,9 +4,11 @@ from __future__ import annotations
 import argparse
 import sys
 
+from .audio import BITRATE_STANDARD, FORMATE
 from .befehle import cmd_bereinigen, cmd_exportieren, cmd_probe, cmd_stimme, cmd_vertonen
 from .epub import EPUB_SKIP_DEFAULT
-from .konfig import BACKEND, DEFAULT_VOICE, MAX_CHUNK_CHARS, MODEL_BASE, MODEL_DESIGN, MODEL_KI
+from .konfig import (BACKEND, DEFAULT_VOICE, DESIGN_SEED, MAX_CHUNK_CHARS, MODEL_BASE, MODEL_DESIGN,
+                     MODEL_KI, MODEL_STT)
 
 EPILOG = """\
 Ablauf:
@@ -64,9 +66,19 @@ def main():
     pr = sub.add_parser("probe", help="Stimmen entwerfen und Hörproben erzeugen")
     pr.add_argument("datei", help="(bereinigte) Textdatei")
     pr.add_argument("--ref", help="eigene Referenzaufnahme (WAV, 10–20 s)")
-    pr.add_argument("--ref-text", help="genauer Wortlaut der eigenen Referenzaufnahme")
+    pr.add_argument("--ref-text", help="genauer Wortlaut der eigenen Referenzaufnahme "
+                                       "(sonst aus gleichnamiger .txt, sonst mit Whisper mitgeschrieben)")
     pr.add_argument("--nur-ref", action="store_true",
                     help="keine Stimmen entwerfen, nur die eigene Referenz testen")
+    pr.add_argument("--design", action="append", metavar="BESCHREIBUNG",
+                    help="zusätzliche Stimme nach eigener Beschreibung entwerfen (mehrfach möglich; "
+                         "Alter, Tonlage, Klang, Tempo, Haltung – keine Personennamen). "
+                         "Dateien heißen stimme_entwurf_1.wav, stimme_entwurf_2.wav …")
+    pr.add_argument("--nur-design", action="store_true",
+                    help="nur die mit --design beschriebenen Stimmen entwerfen, nicht die eingebauten")
+    pr.add_argument("--seed", type=int,
+                    help=f"anderer Startwert für den Stimmentwurf (Standard {DESIGN_SEED}); "
+                         "liefert eine andere Variante derselben Beschreibung")
     pr.add_argument("--ausgabe", help="Ordner für die Proben (Standard: probe)")
     pr.add_argument("--modell", default=MODEL_BASE, help=f"TTS-Modell (Standard {MODEL_BASE})")
     pr.add_argument("--modell-design", default=MODEL_DESIGN,
@@ -76,19 +88,26 @@ def main():
 
     st = sub.add_parser("stimme", help="eigene Aufnahme als Standardstimme einrichten")
     st.add_argument("datei", help="Aufnahme (WAV/M4A/MP3, 10–20 s, ruhig gesprochen)")
-    st.add_argument("--text", help="genauer Wortlaut der Aufnahme (sonst aus gleichnamiger .txt)")
+    st.add_argument("--text", help="genauer Wortlaut der Aufnahme (sonst aus gleichnamiger .txt, "
+                                   "sonst mit Whisper mitgeschrieben)")
     st.add_argument("--ziel", help=f"Speicherort (Standard {DEFAULT_VOICE})")
+    st.add_argument("--modell-stt", default=MODEL_STT,
+                    help=f"Spracherkennung für den Wortlaut (Standard {MODEL_STT})")
     st.set_defaults(func=cmd_stimme)
 
     v = sub.add_parser("vertonen", help="ganzes Buch vertonen")
     v.add_argument("datei", help="(bereinigte) Textdatei")
     v.add_argument("--ref", help="Referenzstimme (WAV), z. B. probe/stimme_erzaehler_m.wav; "
                                  "Standard: eingerichtete eigene Stimme")
-    v.add_argument("--ref-text", help="Wortlaut der Referenz (sonst aus gleichnamiger .txt)")
+    v.add_argument("--ref-text", help="Wortlaut der Referenz (sonst aus gleichnamiger .txt, "
+                                      "sonst mit Whisper mitgeschrieben)")
     v.add_argument("--titel", help="Titel des Hörbuchs")
-    v.add_argument("--cover", help="Coverbild (JPG/PNG) für die M4B-Datei")
-    v.add_argument("--format", choices=["m4b", "mp3"], default="m4b",
-                   help="m4b = eine Datei mit Kapitelmarken, mp3 = eine Datei pro Kapitel")
+    v.add_argument("--autor", help="Autor, wird als Interpret in die Datei geschrieben")
+    v.add_argument("--cover", help="Coverbild (JPG/PNG), eingebettet in M4B und MP3")
+    v.add_argument("--format", choices=list(FORMATE), default="m4b",
+                   help="Ausgabeformat: " + "; ".join(f"{k} = {v}" for k, v in FORMATE.items()))
+    v.add_argument("--bitrate", help="Bitrate der Ausgabe, z. B. 96k (Standard: "
+                                     + ", ".join(f"{k} {v}" for k, v in BITRATE_STANDARD.items()) + ")")
     v.add_argument("--ausgabe", help="Ausgabedatei bzw. -ordner")
     v.add_argument("--arbeitsordner", help="Ordner für Zwischendateien")
     v.add_argument("--abschnitt", type=int, default=MAX_CHUNK_CHARS,

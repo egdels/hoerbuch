@@ -9,12 +9,41 @@ from __future__ import annotations
 import re
 import sys
 
-from .audio import normalize_level, trim_silence
+from .audio import lade_mono, normalize_level, trim_silence
 from .konfig import (BACKEND, LANGUAGE, MAX_CHARS_PER_SEC, MAX_TRIES, MIN_CHARS_PER_SEC,
-                     torch_geraet_und_typ)
+                     MIN_SPEAKER_SIMILARITY, SPEAKER_MIN_SECONDS, torch_geraet_und_typ)
+
+SPEAKER_RATE = 24000         # der Sprecher-Encoder von Qwen3-TTS rechnet mit 24 kHz
 
 
-class _VoiceMLX:
+class _Sprecherpruefung:
+    """Vergleicht erzeugtes Audio über den Sprecher-Encoder des Modells mit der Referenz.
+    Die Backends liefern nur _embedding(audio); die Referenz wird einmal berechnet und gemerkt."""
+    _ref_embedding = None        # (Pfad, normierter Vektor)
+    _ohne_encoder = False
+
+    def aehnlichkeit(self, audio, ref_audio) -> float | None:
+        """Kosinus-Ähnlichkeit zur Referenzstimme, None wenn nicht messbar (zu kurz, kein Encoder)."""
+        import numpy as np
+        if self._ohne_encoder or self.sample_rate != SPEAKER_RATE \
+                or audio.size < SPEAKER_MIN_SECONDS * SPEAKER_RATE:
+            return None
+        try:
+            if self._ref_embedding is None or self._ref_embedding[0] != str(ref_audio):
+                self._ref_embedding = (str(ref_audio), self._normiert(lade_mono(ref_audio, SPEAKER_RATE)))
+            return float(np.dot(self._ref_embedding[1], self._normiert(audio)))
+        except Exception as e:     # Modell ohne Encoder o. Ä.: Prüfung abschalten statt abbrechen
+            print(f"Hinweis: Stimmprüfung nicht möglich ({e}) – wird übersprungen.")
+            self._ohne_encoder = True
+            return None
+
+    def _normiert(self, audio):
+        import numpy as np
+        e = np.asarray(self._embedding(np.asarray(audio, dtype=np.float32)), dtype=np.float64).reshape(-1)
+        return e / max(float(np.linalg.norm(e)), 1e-12)
+
+
+class _VoiceMLX(_Sprecherpruefung):
     """mlx-audio: Modell + Stimme. Hält nur ein Modell gleichzeitig im Speicher."""
 
     def __init__(self, model_id: str, verbose: bool = False):
@@ -52,8 +81,14 @@ class _VoiceMLX:
         audio = np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)
         return audio
 
+    def _embedding(self, audio):
+        import mlx.core as mx
+        import numpy as np
+        return np.array(self.model.extract_speaker_embedding(mx.array(audio), SPEAKER_RATE))
+
     def close(self):
         import gc
+        self._ref_embedding = None
         del self.model
         gc.collect()
         try:
@@ -63,7 +98,7 @@ class _VoiceMLX:
             pass
 
 
-class _VoiceTorch:
+class _VoiceTorch(_Sprecherpruefung):
     """qwen-tts (PyTorch): dieselbe Schnittstelle wie _VoiceMLX."""
 
     def __init__(self, model_id: str, verbose: bool = False):
@@ -125,9 +160,16 @@ class _VoiceTorch:
             w = w.detach().float().cpu().numpy()
         return np.asarray(w, dtype=np.float32).reshape(-1)
 
+    def _embedding(self, audio):
+        import torch
+        with torch.inference_mode():
+            e = self.model.model.extract_speaker_embedding(audio=audio, sr=SPEAKER_RATE)
+        return e.detach().float().cpu().numpy()
+
     def close(self):
         import gc
         self._clone_prompt = None
+        self._ref_embedding = None
         del self.model
         gc.collect()
         try:
@@ -151,18 +193,58 @@ def plausible(text: str, seconds: float) -> bool:
     return MIN_CHARS_PER_SEC <= cps <= MAX_CHARS_PER_SEC
 
 
-def synth_checked(voice: Voice, text: str, **kw):
-    """Erzeugt Audio, prüft die Länge und versucht es bei Auffälligkeiten erneut."""
+def abrupt_ending(audio, sr: int, thresh: float = 0.01, max_drop_db: float = 8.0) -> bool:
+    """Abgebrochener Schluss: Die letzten 40 ms Sprache sind noch fast so laut wie der ganze
+    Abschnitt. Natürlich ausklingende Sprache liegt dort 10 dB und mehr darunter (gemessen an
+    rund 70 Abschnitten: Median −16 dB, abgehackte Beispiele −7 bis 0 dB)."""
+    import numpy as np
+    if audio.size < int(0.4 * sr):
+        return False
+    idx = np.where(np.abs(audio) > thresh)[0]
+    if idx.size == 0:
+        return False
+    end = int(idx[-1]) + 1
+    a = end - int(0.04 * sr)
+    if a <= 0:
+        return False
+    rms_all = float(np.sqrt(np.mean(audio[:end].astype(np.float64) ** 2)))
+    rms_tail = float(np.sqrt(np.mean(audio[a:end].astype(np.float64) ** 2)))
+    if rms_all < 1e-6 or rms_tail < 1e-6:
+        return False
+    return 20 * np.log10(rms_tail / rms_all) > -max_drop_db
+
+
+def befund(text: str, audio, sr: int, similarity: float | None) -> str:
+    """Leerer Text, wenn der Abschnitt unauffällig ist, sonst die Auffälligkeiten."""
+    gruende = []
+    if not plausible(text, audio.size / sr):
+        gruende.append("Länge")
+    if abrupt_ending(audio, sr):
+        gruende.append("Schluss abgehackt")
+    if similarity is not None and similarity < MIN_SPEAKER_SIMILARITY:
+        gruende.append(f"Stimme weicht ab ({similarity:.3f})".replace(".", ","))
+    return ", ".join(gruende)
+
+
+def synth_checked(voice: Voice, text: str, **kw) -> tuple:
+    """Erzeugt Audio, prüft Länge, Schluss und Stimme und versucht es bei Auffälligkeiten erneut.
+    Liefert (Audio, Befund); der Befund ist leer, wenn alles passt."""
     best = None
     for attempt in range(MAX_TRIES):
         audio = trim_silence(voice.synth(text, seed=1000 + attempt * 7919, **kw), voice.sample_rate)
         audio = normalize_level(audio)
         secs = audio.size / voice.sample_rate
-        if plausible(text, secs):
-            return audio, True
-        # Behalte den Versuch, der am nächsten an ~14 Zeichen/s liegt
+        sim = voice.aehnlichkeit(audio, kw["ref_audio"]) if kw.get("ref_audio") else None
+        b = befund(text, audio, voice.sample_rate, sim)
+        if not b:
+            return audio, ""
+        if voice.verbose:
+            print(f"\n  Versuch {attempt + 1}: {b}")
+        # Behalte bevorzugt einen Versuch in der richtigen Stimme, dann den, der am nächsten
+        # an ~14 Zeichen/s liegt
         n = len(re.sub(r"\s", "", text))
-        score = abs((n / secs if secs > 0 else 999) - 14)
+        score = (sim is not None and sim < MIN_SPEAKER_SIMILARITY,
+                 abs((n / secs if secs > 0 else 999) - 14))
         if best is None or score < best[0]:
-            best = (score, audio)
-    return best[1], False
+            best = (score, audio, b)
+    return best[1], best[2]

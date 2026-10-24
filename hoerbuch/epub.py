@@ -15,6 +15,10 @@ from .bereinigung import INVISIBLE
 
 EPUB_SKIP_DEFAULT = (r"cover|titel|title|impressum|copyright|inhalt|contents|^toc|^nav|"
                      r"weitere bücher|werbung|anzeige|advertis|bookwire|leseprobe|scan|qr-?code")
+# Impressum ohne sprechenden Dateinamen: kurzes Dokument mit typischen Verlagsangaben
+IMPRESSUM_MAX_CHARS = 2500
+IMPRESSUM_RE = re.compile(r"©|\bISBN\b|Alle Rechte vorbehalten|Covergestaltung|Umschlaggestaltung|"
+                          r"Printed in|Satz:|Druck und Bindung|Lektorat:", re.IGNORECASE)
 BLOCK_TAGS = {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote",
               "tr", "table", "ul", "ol", "section", "article", "header", "footer",
               "figure", "figcaption", "dd", "dt", "pre", "aside", "nav"}
@@ -236,6 +240,10 @@ def epub_to_text(path: Path, skip_pattern: str = EPUB_SKIP_DEFAULT, with_intro: 
         probe = f"{basename} {label}"
         if skip_re and skip_re.search(probe):
             report.append(f"  übersprungen ({label or basename}, {total} Zeichen)")
+            continue
+        if total < IMPRESSUM_MAX_CHARS and IMPRESSUM_RE.search(" ".join(t for t, _ in blocks)):
+            # Impressum mit nichtssagendem Dateinamen: kurz, mit ©, ISBN oder Verlagsangaben
+            report.append(f"  übersprungen (Impressum erkannt: {label or basename}, {total} Zeichen)")
             continue
         docs.append({"blocks": blocks, "label": label, "name": basename, "chars": total})
 

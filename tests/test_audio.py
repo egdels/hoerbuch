@@ -55,3 +55,102 @@ def test_plausible():
     assert not plausible(text, 2.0)       # viel zu schnell → Text verschluckt
     assert plausible("Ja.", 1.0)          # sehr kurze Texte werden nicht geprüft
     assert not plausible("Ja.", 0.1)
+
+
+# ---- Export-Formate -------------------------------------------------------
+
+import shutil
+import subprocess
+from pathlib import Path
+
+from hoerbuch.audio import BITRATE_STANDARD, FORMATE, build_output, ffmetadata, sicherer_name
+
+
+def test_sicherer_name():
+    assert sicherer_name("Kapitel 3: Die Rückkehr?", 3) == "Kapitel 3 Die Rückkehr"
+    assert sicherer_name("Ende...", 7) == "Ende"            # kein Punkt am Ende (Windows)
+    assert sicherer_name("***", 2) == "Kapitel 2"
+    assert len(sicherer_name("x" * 100, 1)) == 60
+
+
+def test_ffmetadata_kapitel_und_maskierung(tmp_path):
+    files = [("Kapitel 1", tmp_path / "a.wav", 1.5), ("Teil 2; a=b #c", tmp_path / "b.wav", 2.25)]
+    meta = ffmetadata(files, "Titel=Test", autor="Erika Muster")
+    assert meta.startswith(";FFMETADATA1\ntitle=Titel\\=Test\n")
+    assert "artist=Erika Muster\n" in meta and "album=Titel\\=Test\n" in meta
+    assert meta.count("[CHAPTER]") == 2
+    assert "START=0\nEND=1500\ntitle=Kapitel 1\n" in meta
+    assert "START=1500\nEND=3750\ntitle=Teil 2\; a\\=b \\#c\n" in meta
+    assert "artist" not in ffmetadata(files, "T")
+
+
+def test_formate_und_bitraten_konsistent():
+    assert set(BITRATE_STANDARD) == set(FORMATE) - {"wav"}
+
+
+def _kapitel_wavs(tmp_path):
+    sr = 24000
+    files = []
+    for n, (titel, sek) in enumerate([("Kapitel 1", 0.6), ("Kapitel 2: Ende.", 0.4)], 1):
+        p = tmp_path / f"kapitel_{n:03d}.wav"
+        write_wav(p, sinus(sek, sr), sr)
+        files.append((titel, p, sek))
+    return files
+
+
+def _kapitel_in_datei(path):
+    out = subprocess.run(["ffprobe", "-v", "error", "-show_chapters", "-of", "csv=p=0", str(path)],
+                         capture_output=True, text=True, check=True).stdout
+    return [ln for ln in out.splitlines() if ln.strip()]
+
+
+def test_build_output_wav_ohne_ffmpeg(tmp_path):
+    files = _kapitel_wavs(tmp_path)
+    build_output(files, tmp_path / "buch.txt", "Buch", fmt="wav")
+    out = sorted((tmp_path / "buch_wav").glob("*.wav"))
+    assert [p.name for p in out] == ["001 - Kapitel 1.wav", "002 - Kapitel 2 Ende.wav"]
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="ffmpeg fehlt")
+@pytest.mark.parametrize("fmt,endung", [("m4b", ".m4b"), ("mp3-buch", ".mp3"), ("opus", ".opus")])
+def test_build_output_eine_datei_mit_kapiteln(tmp_path, fmt, endung):
+    files = _kapitel_wavs(tmp_path)
+    build_output(files, tmp_path / "buch.txt", "Buch", fmt=fmt, autor="Erika Muster")
+    out = tmp_path / ("buch" + endung)
+    assert out.exists() and out.stat().st_size > 1000
+    assert len(_kapitel_in_datei(out)) == 2
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg fehlt")
+def test_build_output_mp3_je_kapitel_mit_cover(tmp_path):
+    files = _kapitel_wavs(tmp_path)
+    cover = tmp_path / "cover.png"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=blue:s=64x64:d=1",
+                    "-frames:v", "1", str(cover)], check=True)
+    build_output(files, tmp_path / "buch.txt", "Buch", fmt="mp3", cover=str(cover), bitrate="48k")
+    out = sorted((tmp_path / "buch_mp3").glob("*.mp3"))
+    assert [p.name for p in out] == ["001 - Kapitel 1.mp3", "002 - Kapitel 2 Ende.mp3"]
+    streams = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0",
+                              str(out[0])], capture_output=True, text=True).stdout
+    assert "video" in streams        # eingebettetes Cover
+
+
+
+# ---- Abbrucherkennung -----------------------------------------------------
+
+def _sprache(sekunden, sr=24000):
+    t = np.arange(int(sekunden * sr)) / sr
+    return (0.1 * np.sin(2 * np.pi * 220 * t) * (1 + 0.5 * np.sin(2 * np.pi * 4 * t))).astype(np.float32)
+
+
+def test_abrupt_ending_erkennt_harten_schnitt():
+    from hoerbuch.tts import abrupt_ending
+    sr = 24000
+    hart = _sprache(1.2, sr)                                  # endet bei vollem Pegel
+    assert abrupt_ending(hart, sr)
+    weich = _sprache(1.2, sr).copy()                          # klingt über 200 ms exponentiell aus
+    n = int(0.2 * sr)
+    weich[-n:] *= np.exp(-np.linspace(0, 6, n)).astype(np.float32)
+    assert not abrupt_ending(weich, sr)
+    assert not abrupt_ending(np.zeros(sr, dtype=np.float32), sr)
+    assert not abrupt_ending(_sprache(0.2, sr), sr)          # zu kurz für eine Aussage

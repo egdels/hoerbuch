@@ -51,3 +51,18 @@ def test_sample_paragraph_ueberspringt_ueberschriften():
     probe = sample_paragraph(text)
     assert probe.startswith("Ein langer Fließtextabsatz.")
     assert not probe.startswith("#")
+
+
+def test_absatzende_bekommt_satzzeichen():
+    from hoerbuch.kapitel import mit_satzzeichen
+    assert mit_satzzeichen("Der alte Bahnhof") == "Der alte Bahnhof."
+    assert mit_satzzeichen("Er ging,") == "Er ging."
+    assert mit_satzzeichen("Fertig.") == "Fertig."
+    assert mit_satzzeichen("„Komm!“") == "„Komm!“"
+    assert mit_satzzeichen("Und dann …") == "Und dann …"
+    chapters = parse_book("Der alte Bahnhof\n\nEs war still", 350, "Buch")
+    assert [c.text for c in chapters[0].chunks] == ["Der alte Bahnhof.", "Es war still."]
+    # Zwischenstücke eines langen Absatzes bleiben unverändert, nur das letzte Stück wird geschlossen
+    lang = "Teil eins ist hier, Teil zwei ist auch hier, Teil drei kommt ohne Punkt"
+    chunks = [c.text for c in parse_book(lang, 30, "Buch")[0].chunks]
+    assert chunks[-1].endswith(".") and all(not c.endswith(".") for c in chunks[:-1])

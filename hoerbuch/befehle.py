@@ -1,6 +1,7 @@
 """Die fünf Unterbefehle: exportieren, bereinigen, probe, stimme, vertonen."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -15,9 +16,33 @@ from .epub import EPUB_SKIP_DEFAULT, epub_to_text
 from .hilfen import fmt_dur
 from .kapitel import parse_book, sample_paragraph
 from .ki import ki_refine
-from .konfig import DEFAULT_VOICE, FFMPEG_HINT, REF_SENTENCE, VOICE_DESIGNS, default_voice
+from .konfig import (DEFAULT_VOICE, DESIGN_SEED, FFMPEG_HINT, MODEL_STT, REF_SENTENCE, default_voice,
+                     stimmentwuerfe)
+from .stt import transkribieren
 from .tts import Voice, synth_checked
 from .zahlen import num2words_available
+
+def referenztext(ref: Path, angegeben: str | None, model_id: str = MODEL_STT) -> str:
+    """Wortlaut der Referenzaufnahme: angegeben, sonst aus der gleichnamigen .txt, sonst mit
+    Whisper mitgeschrieben und als .txt neben der Aufnahme gespeichert."""
+    if angegeben and angegeben.strip():
+        return angegeben.strip()
+    txt = ref.with_suffix(".txt")
+    if txt.exists() and (text := txt.read_text(encoding="utf-8").strip()):
+        return text
+    text = transkribieren(ref, model_id)
+    if not text:
+        sys.exit(f"Kein Wortlaut in {ref} erkannt. Bitte --ref-text \"…\" angeben oder {txt} anlegen.")
+    txt.write_text(text, encoding="utf-8")
+    _wortlaut_hinweis(text, txt)
+    return text
+
+
+def _wortlaut_hinweis(text: str, txt: Path):
+    print(f"  Erkannter Wortlaut: {text}")
+    print(f"  Gespeichert in {txt}. Bitte gegenlesen: Abweichungen von der Aufnahme "
+          "(Namen, Zahlen, ausgelassene Wörter) verschlechtern die geklonte Stimme.")
+
 
 def cmd_exportieren(args) -> Path:
     src = Path(args.datei)
@@ -100,22 +125,29 @@ def cmd_probe(args):
 
     if args.nur_ref and not args.ref and not default_voice():
         sys.exit("--nur-ref braucht --ref oder eine eingerichtete Standardstimme (hoerbuch stimme …).")
+    designs = stimmentwuerfe(args.design, args.nur_design)
+    if args.nur_design and not designs:
+        sys.exit("--nur-design braucht mindestens eine Beschreibung mit --design \"…\".")
     # Schritt A: Referenzstimmen per Beschreibung entwerfen
     refs: dict[str, Path] = {}
-    if not args.nur_ref:
+    if not args.nur_ref and designs:
         designer = Voice(args.modell_design, verbose=args.verbose)
-        for name, desc in VOICE_DESIGNS.items():
+        seed = args.seed if args.seed is not None else DESIGN_SEED
+        for name, desc in designs.items():
+            if seed != DESIGN_SEED:
+                name = f"{name}_seed{seed}"      # Varianten nebeneinander aufheben
             path = outdir / f"stimme_{name}.wav"
             if path.exists():
                 print(f"  vorhanden: {path}")
             else:
                 t0 = time.time()
-                audio = normalize_level(trim_silence(designer.synth(REF_SENTENCE, instruct=desc, seed=42),
+                audio = normalize_level(trim_silence(designer.synth(REF_SENTENCE, instruct=desc, seed=seed),
                                                      designer.sample_rate))
                 write_wav(path, audio, designer.sample_rate)
                 print(f"  Referenzstimme {path}  ({audio.size / designer.sample_rate:.1f} s, "
                       f"{time.time() - t0:.0f} s Rechenzeit)")
             (outdir / f"stimme_{name}.txt").write_text(REF_SENTENCE, encoding="utf-8")
+            (outdir / f"stimme_{name}.beschreibung.txt").write_text(desc + "\n", encoding="utf-8")
             refs[name] = path
         designer.close()
 
@@ -124,25 +156,24 @@ def cmd_probe(args):
     elif default_voice():
         refs["eigene"] = default_voice()
         print(f"  eigene Standardstimme: {refs['eigene']}")
+    # Wortlaut der eigenen Referenz vor dem TTS-Modell klären (Whisper braucht sonst zusätzlich Speicher)
+    if "eigene" in refs:
+        if not refs["eigene"].exists():
+            sys.exit(f"Referenzaufnahme nicht gefunden: {refs['eigene']}")
+        eigene_text = referenztext(refs["eigene"], args.ref_text)
 
     # Schritt B: Probeabsatz mit jeder Referenzstimme (so klingt später das Buch)
     reader = Voice(args.modell, verbose=args.verbose)
     for name, ref in refs.items():
-        ref_text = args.ref_text if name == "eigene" else REF_SENTENCE
-        if name == "eigene" and not ref_text:
-            txt = ref.with_suffix(".txt")
-            ref_text = txt.read_text(encoding="utf-8").strip() if txt.exists() else None
-        if not ref_text:
-            print(f"  Überspringe {ref}: --ref-text fehlt (Wortlaut der Aufnahme).")
-            continue
+        ref_text = eigene_text if name == "eigene" else REF_SENTENCE
         t0 = time.time()
-        audio, ok = synth_checked(reader, sample, ref_audio=ref, ref_text=ref_text)
+        audio, auffaellig = synth_checked(reader, sample, ref_audio=ref, ref_text=ref_text)
         dur = audio.size / reader.sample_rate
         out = outdir / f"probe_{name}.wav"
         write_wav(out, audio, reader.sample_rate)
         took = time.time() - t0
         print(f"  Hörprobe {out}  ({dur:.1f} s Audio in {took:.0f} s"
-              f"{'' if ok else ', Länge auffällig – bitte anhören'})")
+              f"{f', auffällig: {auffaellig} – bitte anhören' if auffaellig else ''})")
         if dur > 0:
             speed = len(sample) / took
             print(f"    Tempo: ≈ {speed * 60:,.0f} Zeichen/Minute".replace(",", "."))
@@ -159,12 +190,9 @@ def cmd_stimme(args):
     src = Path(args.datei)
     if not src.exists():
         sys.exit(f"Aufnahme nicht gefunden: {src}")
-    text = args.text
-    if not text:
-        txt = src.with_suffix(".txt")
-        if not txt.exists():
-            sys.exit("Bitte --text \"…\" angeben (genauer Wortlaut der Aufnahme) "
-                     f"oder eine Datei {txt} anlegen.")
+    text = (args.text or "").strip()
+    txt = src.with_suffix(".txt")
+    if not text and txt.exists():
         text = txt.read_text(encoding="utf-8").strip()
     if not shutil.which("ffmpeg"):
         sys.exit(f"ffmpeg fehlt ({FFMPEG_HINT}).")
@@ -181,7 +209,13 @@ def cmd_stimme(args):
                            "areverse,silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.3,areverse,"
                            "apad=pad_dur=0.4",
                     str(dest)], check=True)
-    dest.with_suffix(".txt").write_text(text.strip(), encoding="utf-8")
+    # Ohne Wortlaut schreibt Whisper ihn mit (aus der aufbereiteten Datei, ohne Randstille)
+    erkannt = not text
+    if erkannt:
+        text = transkribieren(dest, args.modell_stt)
+        if not text:
+            sys.exit("Kein Wortlaut erkannt. Bitte --text \"…\" angeben (genauer Wortlaut der Aufnahme).")
+    dest.with_suffix(".txt").write_text(text, encoding="utf-8")
     audio, sr = read_wav(dest)
     dur = audio.size / sr
     rms = 20 * np.log10(max(float(np.sqrt(np.mean(audio ** 2))), 1e-9))
@@ -192,10 +226,59 @@ def cmd_stimme(args):
         print("  Hinweis: Die Aufnahme ist kurz. 10–20 Sekunden geben dem Modell mehr Material.")
     elif dur > 30:
         print("  Hinweis: Die Aufnahme ist lang. 10–20 Sekunden reichen; sehr lange Referenzen bremsen.")
+    if erkannt:
+        _wortlaut_hinweis(text, dest.with_suffix(".txt"))
     if dest.resolve() == DEFAULT_VOICE.resolve():
         print("  'probe' und 'vertonen' verwenden diese Stimme jetzt automatisch, wenn kein --ref angegeben ist.")
     else:
         print(f"  Verwenden mit:  --ref {dest}   (Standardstimme bleibt {DEFAULT_VOICE})")
+
+
+def _abschnitt_hash(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+
+
+def abschnitte_abgleichen(work: Path, chapters, ref_key: str) -> tuple[int, int]:
+    """Vorhandene Abschnitts-WAVs mit dem aktuellen Text abgleichen. Jeder Abschnitt trägt in
+    plan.json den Hash seines Textes; Abschnitte mit unverändertem Text werden weiterverwendet,
+    auch wenn sie durch eingefügte oder gelöschte Absätze an eine andere Stelle gerutscht sind.
+    Bei anderer Referenzstimme wird alles verworfen. Gibt (übernommen, verworfen) zurück."""
+    plan_path = work / "plan.json"
+    old = json.loads(plan_path.read_text(encoding="utf-8")) if plan_path.exists() else {}
+    neu = {f"k{ci:03d}_{i:04d}": _abschnitt_hash(c.text)
+           for ci, ch in enumerate(chapters) for i, c in enumerate(ch.chunks)}
+    vorhanden = sorted(work.glob("k[0-9][0-9][0-9]_[0-9][0-9][0-9][0-9].wav"))
+    alt: dict[str, str] = old.get("abschnitte", {})
+    if old.get("ref") != ref_key:
+        alt = {}
+    elif "abschnitte" not in old:
+        # Plan aus älterer Version: Gesamtsignatur mit allen Abschnittstexten → Hashes daraus ableiten
+        try:
+            alt = {f"k{ci:03d}_{i:04d}": _abschnitt_hash(t)
+                   for ci, (_, texte) in enumerate(json.loads(old.get("sig", "[]")))
+                   for i, t in enumerate(texte)}
+        except (ValueError, TypeError):
+            alt = {}
+    # Alle Dateien erst auf ihren Text-Hash umbenennen, dann an ihre neue Stelle
+    pool: dict[str, Path] = {}
+    for f in vorhanden:
+        h = alt.get(f.stem)
+        if h is None or (h in pool):
+            f.unlink()
+            continue
+        pool[h] = f.rename(work / f"h_{h}.wav")
+    uebernommen = 0
+    for name, h in neu.items():
+        f = pool.pop(h, None)
+        if f is not None:
+            f.rename(work / f"{name}.wav")
+            uebernommen += 1
+    verworfen = len(vorhanden) - uebernommen
+    for f in pool.values():
+        f.unlink()
+    plan_path.write_text(json.dumps({"ref": ref_key, "abschnitte": neu}, ensure_ascii=False, indent=0),
+                         encoding="utf-8")
+    return uebernommen, verworfen
 
 
 def cmd_vertonen(args):
@@ -211,13 +294,7 @@ def cmd_vertonen(args):
                  "hoerbuch stimme aufnahme.wav --text \"…\"")
     if not ref.exists():
         sys.exit(f"Referenzaufnahme nicht gefunden: {ref}")
-    ref_text = args.ref_text
-    if not ref_text:
-        txt = ref.with_suffix(".txt")
-        if not txt.exists():
-            sys.exit("Bitte --ref-text angeben (genauer Wortlaut der Referenzaufnahme) "
-                     f"oder eine Datei {txt} anlegen.")
-        ref_text = txt.read_text(encoding="utf-8").strip()
+    ref_text = referenztext(ref, args.ref_text)
 
     text = src.read_text(encoding="utf-8")
     if not args.ohne_bereinigung and not re.search(r"^# ", text, re.M):
@@ -232,17 +309,11 @@ def cmd_vertonen(args):
     work = Path(args.arbeitsordner or src.with_suffix("").as_posix() + "_audio")
     work.mkdir(exist_ok=True)
 
-    # Wenn sich der Text geändert hat, alte Abschnitte nicht wiederverwenden
-    sig = json.dumps([[ch.title, [c.text for c in ch.chunks]] for ch in chapters],
-                     ensure_ascii=False)
-    meta_path = work / "plan.json"
-    old = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else None
-    if old and (old.get("sig") != sig or old.get("ref") != str(ref.resolve())):
-        print("Text oder Stimme haben sich geändert – bisherige Audioabschnitte werden verworfen.")
-        for f in work.glob("k*_*.wav"):
-            f.unlink()
-    meta_path.write_text(json.dumps({"sig": sig, "ref": str(ref.resolve())}, ensure_ascii=False),
-                         encoding="utf-8")
+    # Vorhandene Abschnitte weiterverwenden, soweit Text und Stimme unverändert sind
+    uebernommen, verworfen = abschnitte_abgleichen(work, chapters, str(ref.resolve()))
+    if verworfen:
+        was = "1 Abschnitt wird" if verworfen == 1 else f"{verworfen} Abschnitte werden"
+        print(f"Text oder Stimme haben sich geändert: {was} neu erzeugt, {uebernommen} bleiben.")
 
     print(f"{len(chapters)} Kapitel, {n_chunks} Abschnitte, {total_chars:,} Zeichen".replace(",", "."))
     done_chars = sum(len(c.text) for ci, ch in enumerate(chapters) for i, c in enumerate(ch.chunks)
@@ -262,11 +333,11 @@ def cmd_vertonen(args):
                     continue
                 if voice is None:
                     voice = Voice(args.modell, verbose=args.verbose)
-                audio, ok = synth_checked(voice, c.text, ref_audio=ref, ref_text=ref_text,
-                                          temperature=args.temperatur)
+                audio, auffaellig = synth_checked(voice, c.text, ref_audio=ref, ref_text=ref_text,
+                                                  temperature=args.temperatur)
                 write_wav(path, audio, voice.sample_rate)
-                if not ok:
-                    suspicious.append((path.name, c.text))
+                if auffaellig:
+                    suspicious.append((path.name, auffaellig, c.text))
                 chars_this_run += len(c.text)
                 done_chars += len(c.text)
                 el = time.time() - t_start
@@ -282,9 +353,9 @@ def cmd_vertonen(args):
         if suspicious:
             log = work / "auffaellig.txt"
             with log.open("a", encoding="utf-8") as f:
-                for name, t in suspicious:
-                    f.write(f"{name}\t{t}\n")
-            print(f"\n{len(suspicious)} Abschnitte mit auffälliger Länge → {log}")
+                for name, b, t in suspicious:
+                    f.write(f"{name}\t{b}\t{t}\n")
+            print(f"\n{len(suspicious)} Abschnitte auffällig (Länge, Schluss oder Stimme) → {log}")
             print("  Zum Neuerzeugen einfach die WAV-Datei löschen und das Skript erneut starten.")
         if voice is not None:
             voice.close()
@@ -303,4 +374,5 @@ def cmd_vertonen(args):
         write_wav(out, np.concatenate(parts), sr)
         chapter_files.append((ch.title, out, sum(p.size for p in parts) / sr))
 
-    build_output(chapter_files, src, title, fmt=args.format, ausgabe=args.ausgabe, cover=args.cover)
+    build_output(chapter_files, src, title, fmt=args.format, ausgabe=args.ausgabe, cover=args.cover,
+                 autor=args.autor, bitrate=args.bitrate)

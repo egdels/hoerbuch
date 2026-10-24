@@ -15,8 +15,9 @@ OPF = """<?xml version="1.0"?>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
     <item id="k1" href="kap1.xhtml" media-type="application/xhtml+xml"/>
     <item id="k2" href="kap2.xhtml" media-type="application/xhtml+xml"/>
+    <item id="imp" href="AUD_02_epub_001.xhtml" media-type="application/xhtml+xml"/>
   </manifest>
-  <spine><itemref idref="cover"/><itemref idref="nav"/><itemref idref="k1"/><itemref idref="k2"/></spine>
+  <spine><itemref idref="cover"/><itemref idref="imp"/><itemref idref="nav"/><itemref idref="k1"/><itemref idref="k2"/></spine>
 </package>"""
 
 COVER = "<html><body><p>Umschlagbild mit etwas Text, damit die Datei nicht leer ist.</p></body></html>"
@@ -30,6 +31,9 @@ KAP1 = """<html><head><title>Kap 1</title></head><body>
 <table><tr><td>Jahr</td><td>Wert</td></tr><tr><td>1848</td><td>zwölf</td></tr></table>
 </body></html>"""
 KAP2 = "<html><body><h1>Die Nachricht</h1><p>Am nächsten Morgen lag ein Brief vor seiner Tür.</p></body></html>"
+IMPRESSUM = ("<html><body><p>Mehr über unsere Bücher: www.beispielverlag.example</p>"
+             "<p>© Beispielverlag GmbH, Musterstadt 2024</p><p>Covergestaltung: Büro Muster</p>"
+             "<p>ISBN 978-3-00-000000-0</p></body></html>")
 
 
 def make_epub(path):
@@ -41,6 +45,7 @@ def make_epub(path):
         z.writestr("OEBPS/nav.xhtml", NAV)
         z.writestr("OEBPS/kap1.xhtml", KAP1)
         z.writestr("OEBPS/kap2.xhtml", KAP2)
+        z.writestr("OEBPS/AUD_02_epub_001.xhtml", IMPRESSUM)
 
 
 def test_epub_to_text(tmp_path):
@@ -63,6 +68,9 @@ def test_epub_to_text(tmp_path):
     assert "Jahr, Wert." in lines and "1848, zwölf." in lines     # Tabellen zeilenweise
     assert any("Tabellen" in i for i in info)
     assert any("übersprungen" in i for i in info)
+    # Impressum mit nichtssagendem Dateinamen wird am Inhalt erkannt
+    assert any("Impressum erkannt: AUD_02_epub_001.xhtml" in i for i in info)
+    assert "Beispielverlag" not in text and "AUD 02" not in text
 
 
 def test_epub_ohne_intro_und_ohne_auslassen(tmp_path):

@@ -55,6 +55,17 @@ def split_long(sentence: str, limit: int) -> list[str]:
     return out
 
 
+def mit_satzzeichen(s: str) -> str:
+    """Hängt einen Punkt an, wenn der Abschnitt ohne Satzschluss endet. Ohne Satzzeichen bricht
+    das Modell kurze Texte gelegentlich mitten im letzten Laut ab."""
+    s = s.rstrip()
+    if not s or re.search(r"[.!?…][\"“”»«'’)]*$", s):
+        return s
+    if s[-1] in ",;:–-":
+        s = s[:-1].rstrip()
+    return s + "."
+
+
 def paragraph_chunks(par: str, limit: int) -> list[str]:
     sentences = [s.strip() for s in SENT_END.sub(r"\1\n", par).split("\n") if s.strip()]
     pieces = [x for s in sentences for x in split_long(s, limit)]
@@ -93,7 +104,9 @@ def parse_book(text: str, limit: int, default_title: str) -> list[Chapter]:
         b = " ".join(b.split())
         cs = paragraph_chunks(b, limit)
         for i, c in enumerate(cs):
-            current.chunks.append(Chunk(c, PAUSE_PARAGRAPH if i == len(cs) - 1 else PAUSE_SENTENCE))
+            last = i == len(cs) - 1
+            current.chunks.append(Chunk(mit_satzzeichen(c) if last else c,
+                                        PAUSE_PARAGRAPH if last else PAUSE_SENTENCE))
     if current.chunks:
         chapters.append(current)
     return chapters
